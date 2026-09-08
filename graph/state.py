@@ -6,10 +6,11 @@ object, never directly with each other. That's what makes each node
 independently inspectable, replayable, and swappable — the contract is
 "what's in the state," not "what this specific agent expects to receive."
 
-This is intentionally Phase-3-minimal: just enough fields for stub nodes
-to prove the graph's shape is correct. Phase 4/5/6 will extend it (real
-signal payloads, RiskConfig, order confirmations) without changing this
-file's role as the single source of truth for what flows through the graph.
+Phase 5/6 update: portfolio_snapshot is now the real PortfolioSnapshot
+(portfolio/state.py), not a placeholder dict — RiskAgent and the
+coordinator both read it as a typed object (.equity, .positions,
+.correlation_matrix), not dict keys. proposed_shares carries RiskAgent's
+sizing decision forward to ExecutionAgent without re-deriving it.
 """
 
 from __future__ import annotations
@@ -19,7 +20,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+
+from portfolio.state import PortfolioSnapshot
 
 
 class AgentLogEntry(BaseModel):
@@ -33,10 +36,12 @@ class AgentLogEntry(BaseModel):
 
 
 class Signal(BaseModel):
-    """Placeholder shape for News/Chart/Merged signals. Phase 4/5 will
-    flesh this out to match the {direction, confidence, rationale} shape
-    from the architecture doc — kept minimal here since Phase 3 only
-    needs to prove data flows, not what the data means yet."""
+    """Shape shared by News/Chart/Merged signals: {direction, confidence,
+    rationale}. Note: when this holds a merged result, `confidence` carries
+    MergedSignal.combined_confidence — the `agreement` flag itself is not
+    persisted here, only logged (see signal_merger_node). Add an
+    `agreement: Optional[bool]` field here if the dashboard ends up needing
+    it downstream, not just in the log line."""
 
     direction: Optional[str] = None  # "bullish" | "bearish" | "neutral"
     confidence: Optional[float] = None
@@ -52,6 +57,10 @@ class RiskDecision(str, Enum):
 class TradingState(BaseModel):
     """The one object every node reads from and writes to."""
 
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True
+    )  # PortfolioSnapshot carries a DataFrame
+
     ticker: str
 
     news_signal: Optional[Signal] = None
@@ -60,8 +69,9 @@ class TradingState(BaseModel):
 
     risk_decision: RiskDecision = RiskDecision.PENDING
     risk_notes: list[str] = Field(default_factory=list)
+    proposed_shares: float = 0.0
 
-    portfolio_snapshot: dict = Field(default_factory=dict)
+    portfolio_snapshot: Optional[PortfolioSnapshot] = None
 
     # Annotated with operator.add so LangGraph concatenates writes instead
     # of last-value-wins — required because NewsAgent and ChartAgent write

@@ -16,3 +16,20 @@ circuit_breaker:
 
 correlation:
   max_correlation: 0.7        # reject/downsize if >0.7 correlated to existing holdings
+
+# Ticker -> sector mapping, used by RiskAgent's per-sector-cap check and
+# PortfolioRiskCoordinator's cross-ticker sector aggregation.
+sector_map:
+  AAPL: technology
+  MSFT: technology
+  GOOGL: technology
+  META: technology
+  NVDA: technology
+  AMZN: consumer_discretionary
+  TSLA: consumer_discretionary
+  JPM: financials
+  BAC: financials
+  XOM: energy
+  CVX: energy
+  JNJ: healthcare
+  UNH: healthcare

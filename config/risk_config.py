@@ -6,6 +6,7 @@ Pydantic base settings, drop this into it rather than creating a parallel
 one -- the only thing that matters is that `load_risk_config()` returns a
 validated RiskConfig before graph construction.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,6 +35,7 @@ class RiskConfig(BaseModel):
     max_concurrent_positions: int = Field(gt=0)
     circuit_breaker: CircuitBreakerConfig
     correlation: CorrelationConfig
+    sector_map: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _sector_cap_not_below_ticker_cap(self) -> "RiskConfig":

@@ -1,0 +1,9 @@
+langgraph
+langchain
+yfinance
+requests
+alpaca-py
+streamlit
+pydantic
+pandas
+python-dotenv

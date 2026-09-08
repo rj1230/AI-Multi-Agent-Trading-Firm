@@ -1,0 +1,18 @@
+# Default risk mandate for the AI Multi-Agent Trading Firm.
+# Loaded at startup into config.risk_config.RiskConfig (Pydantic-validated).
+# Every field here maps to exactly one check in agents/risk_agent.py.
+
+position_sizing:
+  equity_risk_pct: 0.01       # risk 1% of equity per trade
+  atr_stop_multiple: 1.5      # stop placed at 1.5x ATR from entry
+
+per_ticker_cap_pct: 0.20      # max 20% of portfolio in any one ticker
+per_sector_cap_pct: 0.40      # max 40% of portfolio in any one sector
+
+max_concurrent_positions: 3
+
+circuit_breaker:
+  daily_drawdown_pct: -0.03   # halt new trades if equity down 3% today
+
+correlation:
+  max_correlation: 0.7        # reject/downsize if >0.7 correlated to existing holdings

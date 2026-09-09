@@ -18,5 +18,5 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 
-
+PAPER_STARTING_EQUITY = float(os.getenv("PAPER_STARTING_EQUITY", 100_000))
 ATR_PERIOD = 14  # bars used for RiskAgent's ATR calculation (graph/nodes.py)

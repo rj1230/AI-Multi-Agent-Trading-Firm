@@ -13,7 +13,12 @@ Indicators:
 
 Empty-data handling: if there aren't enough bars for a given indicator's
 window, that indicator is skipped (not defaulted to a fake value) and
-noted in the rationale — mirrors NewsAgent's zero-articles handling.
+noted in the rationale -- mirrors NewsAgent's zero-articles handling.
+
+compute_atr() was added for Phase 5/6 wiring: RiskAgent's position sizing
+needs Average True Range, and this is the module that already owns bar-
+level indicator math -- see graph/nodes.py for why it's called separately
+from run_chart_agent() rather than folded into Signal's output.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ SMA_FAST = 10
 SMA_SLOW = 50
 VOLUME_LOOKBACK = 20
 VOLUME_SPIKE_MULTIPLIER = 1.5
+ATR_WINDOW = 14
 
 
 def _closes(bars: list[OHLCVBar]) -> list[float]:
@@ -73,13 +79,40 @@ def compute_volume_spike(
     return volumes[-1] >= avg * VOLUME_SPIKE_MULTIPLIER
 
 
+def compute_atr(bars: list[OHLCVBar], window: int = ATR_WINDOW) -> float | None:
+    """
+    Average True Range over `window` periods. True Range for a bar is the
+    largest of: high-low, |high - prev_close|, |low - prev_close| -- this
+    is what makes ATR react to gaps, not just intrabar range.
+
+    Returns None (not a fake 0.0) when there aren't enough bars, same
+    empty-data convention as compute_rsi/compute_sma above -- a caller
+    must not silently treat "no data" as "zero volatility".
+    """
+    if len(bars) < window + 1:
+        return None
+
+    true_ranges = []
+    for i in range(1, len(bars)):
+        high, low = bars[i].high, bars[i].low
+        prev_close = bars[i - 1].close
+        true_range = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close),
+        )
+        true_ranges.append(true_range)
+
+    return sum(true_ranges[-window:]) / window
+
+
 def _combine(
     rsi: float | None,
     sma_fast: float | None,
     sma_slow: float | None,
     volume_spike: bool | None,
 ) -> Signal:
-    """Simple, auditable combination rule — every direction call must be
+    """Simple, auditable combination rule -- every direction call must be
     traceable to specific indicator values in the rationale."""
     votes = []  # list of ("bullish"|"bearish"|"neutral", weight)
     notes = []

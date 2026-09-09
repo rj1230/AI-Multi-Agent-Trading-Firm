@@ -1,0 +1,13 @@
+models:
+  - type: main
+    engine: openai
+    model: gpt-3.5-turbo-instruct
+    # Not actually called for the coherence check itself -- that's a
+    # direct action (actions.py) hitting Groq, same model NewsAgent
+    # already uses. NeMo Guardrails still requires a `models: main`
+    # entry to initialize LLMRails even when no Colang flow invokes it.
+
+rails:
+  output:
+    flows:
+      - check signal coherence

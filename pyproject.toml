@@ -1,0 +1,16 @@
+[project]
+name = "ai-multi-agent-trading-firm"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "rj1230", email = "raj418060@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+ai-multi-agent-trading-firm = "ai_multi_agent_trading_firm:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"

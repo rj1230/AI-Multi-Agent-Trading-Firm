@@ -1,7 +1,8 @@
 """
-NewsAgent tests. All external calls (fetch_news, Groq) are mocked — these
-tests verify the agent's own logic (zero-article handling, JSON validation,
-retry-then-fallback), not NewsAPI or Groq themselves.
+NewsAgent tests. All external calls (fetch_news, Groq, and the guardrails
+coherence check) are mocked — these tests verify the agent's own logic
+(zero-article handling, JSON validation, retry-then-fallback, coherence
+gating), not NewsAPI, Groq, or NeMo Guardrails themselves.
 """
 
 import json
@@ -49,6 +50,10 @@ def test_valid_llm_response_produces_matching_signal():
     with (
         patch("agents.news_agent.fetch_news", return_value=news),
         patch("agents.news_agent._call_groq", return_value=llm_json),
+        # Coherence check runs for any non-neutral direction; mock it so
+        # this test doesn't make a real Groq call via the guardrails
+        # action and stays deterministic like every other agent test here.
+        patch("agents.news_agent.check_signal_coherence", return_value=(True, "")),
     ):
         signal = run_news_agent("AAPL")
 
@@ -94,8 +99,82 @@ def test_second_attempt_succeeds_after_first_malformed():
     with (
         patch("agents.news_agent.fetch_news", return_value=news),
         patch("agents.news_agent._call_groq", side_effect=["garbage", good_json]),
+        patch("agents.news_agent.check_signal_coherence", return_value=(True, "")),
     ):
         signal = run_news_agent("AAPL")
 
     assert signal.direction == "bearish"
     assert signal.confidence == 0.6
+
+
+def test_neutral_direction_skips_coherence_check():
+    # Neutral has no directional claim to check for coherence against —
+    # confirms the agent doesn't call the guardrail unnecessarily.
+    news = _make_news_result(["Mixed signals, no clear catalyst"])
+    llm_json = json.dumps(
+        {
+            "direction": "neutral",
+            "confidence": 0.3,
+            "rationale": "No clear catalyst either way",
+        }
+    )
+    with (
+        patch("agents.news_agent.fetch_news", return_value=news),
+        patch("agents.news_agent._call_groq", return_value=llm_json),
+        patch("agents.news_agent.check_signal_coherence") as mock_coherence,
+    ):
+        signal = run_news_agent("AAPL")
+
+    mock_coherence.assert_not_called()
+    assert signal.direction == "neutral"
+    assert signal.confidence == 0.3
+
+
+def test_incoherent_signal_falls_back_to_neutral():
+    # Pydantic-valid shape (enum direction, in-range confidence, non-empty
+    # rationale) but self-contradictory content: bullish direction paired
+    # with a rationale describing bad news. This is exactly the case
+    # Pydantic's schema can't catch and check_signal_coherence exists for.
+    news = _make_news_result(["Earnings miss sends shares tumbling"])
+    llm_json = json.dumps(
+        {
+            "direction": "bullish",
+            "confidence": 0.8,
+            "rationale": "stock price is crashing due to bad earnings",
+        }
+    )
+    with (
+        patch("agents.news_agent.fetch_news", return_value=news),
+        patch("agents.news_agent._call_groq", return_value=llm_json),
+        patch(
+            "agents.news_agent.check_signal_coherence",
+            return_value=(False, "Rationale indicates bearish sentiment"),
+        ),
+    ):
+        signal = run_news_agent("AAPL")
+
+    assert signal.direction == "neutral"
+    assert signal.confidence == 0.0
+    assert "incoherent" in signal.rationale.lower()
+
+
+def test_coherent_signal_passes_through_unmodified():
+    # Sanity check for the passing branch: a genuinely coherent bullish
+    # call is not blocked or altered by the guardrail.
+    news = _make_news_result(["Apple raises full-year guidance"])
+    llm_json = json.dumps(
+        {
+            "direction": "bullish",
+            "confidence": 0.75,
+            "rationale": "raised full-year guidance on strong demand",
+        }
+    )
+    with (
+        patch("agents.news_agent.fetch_news", return_value=news),
+        patch("agents.news_agent._call_groq", return_value=llm_json),
+        patch("agents.news_agent.check_signal_coherence", return_value=(True, "")),
+    ):
+        signal = run_news_agent("AAPL")
+
+    assert signal.direction == "bullish"
+    assert signal.confidence == 0.75

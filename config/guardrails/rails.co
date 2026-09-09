@@ -1,0 +1,7 @@
+define flow check signal coherence
+  $result = execute check_signal_coherence_action(direction=$direction, rationale=$rationale)
+  if not $result["coherent"]
+    bot reject incoherent signal
+
+define bot reject incoherent signal
+  "Signal rejected: rationale does not support the stated direction."

@@ -13,6 +13,16 @@ articles, we skip the LLM call entirely and return a neutral, zero-
 confidence signal saying so. This is deliberate — there's no headline
 for the model to reason about, so calling it anyway would just invite
 a hallucinated rationale.
+
+Coherence check (Phase 8, doc §4.4): Pydantic above only validates
+*shape* (valid direction enum, confidence in range, non-empty rationale).
+It cannot catch a self-contradictory but well-formed response, e.g.
+direction="bullish" paired with a rationale describing bad news. That's
+what agents.guardrails.check_signal_coherence exists for -- it runs
+after Pydantic validation succeeds, and a failed coherence check falls
+straight to neutral/hold rather than retrying (unlike the JSON-parse
+retry above, retrying the same prompt would likely reproduce the same
+contradiction).
 """
 
 from __future__ import annotations
@@ -23,6 +33,7 @@ import os
 
 from pydantic import BaseModel, Field, ValidationError
 
+from agents.guardrails import check_signal_coherence
 from data_sources import fetch_news
 from graph.state import Signal
 
@@ -115,6 +126,21 @@ def run_news_agent(ticker: str) -> Signal:
 
     if parsed is None:
         return _fallback_signal("LLM output failed validation after retry")
+
+    # Pydantic confirmed the *shape* is valid; now confirm the *content*
+    # is self-consistent (doc §4.4). No retry here — a failed coherence
+    # check means the model's reasoning was internally contradictory,
+    # and retrying the identical prompt would likely reproduce it.
+    if parsed.direction != "neutral":
+        coherent, reason = check_signal_coherence(parsed.direction, parsed.rationale)
+        if not coherent:
+            logger.warning(
+                "NewsAgent: incoherent signal for %s (%s): %s",
+                ticker,
+                parsed.direction,
+                reason,
+            )
+            return _fallback_signal(f"incoherent signal rejected: {reason}")
 
     return Signal(
         direction=parsed.direction,

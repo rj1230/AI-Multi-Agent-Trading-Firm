@@ -3,6 +3,18 @@ Integration test for the multi-ticker orchestrator, using the same
 patching patterns established in tests/test_nodes.py: fetch_ohlcv and
 _ledger patched directly on graph.nodes, _broker_singleton reset +
 _price_lookup for a real SimBroker.
+
+Isolation note: orchestrator/tick_runner.py imports build_correlation_matrix
+directly from portfolio.state -- a separate name binding from
+nodes_module.fetch_ohlcv, so mocking the latter alone doesn't cover the
+former. Without mocking it too, this test's correctness silently depended
+on TRADING_MODE happening to be "live" in whatever shell ran it -- with
+TRADING_MODE=backtest set (e.g. left over from a manual backtest run
+earlier in the same terminal session), the real facade would hit the
+lookahead guard in data_sources/__init__.py and raise, since this test
+never sets a simulated date (it isn't testing backtest mode at all).
+Mocking build_correlation_matrix directly removes that hidden dependency
+on ambient shell state.
 """
 
 from __future__ import annotations
@@ -71,6 +83,12 @@ def patched_singletons(tmp_path, monkeypatch):
     monkeypatch.setattr(nodes_module, "run_chart_agent", _fake_chart)
     monkeypatch.setattr(nodes_module, "fetch_ohlcv", _fake_series)
     monkeypatch.setattr(nodes_module, "compute_atr", lambda bars: FAKE_ATR)
+    # See module docstring: covers orchestrator/tick_runner.py's own
+    # build_correlation_matrix import, which nodes_module.fetch_ohlcv's
+    # mock does not reach.
+    monkeypatch.setattr(
+        "orchestrator.tick_runner.build_correlation_matrix", lambda tickers: None
+    )
 
 
 def test_three_correlated_sector_proposals_highest_conviction_wins_end_to_end(

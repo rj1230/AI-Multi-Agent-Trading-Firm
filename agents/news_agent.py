@@ -39,8 +39,7 @@ from graph.state import Signal
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = os.getenv("GROQ_NEWS_MODEL", "llama-3.3-70b-versatile")
-
+DEFAULT_MODEL = os.getenv("GROQ_NEWS_MODEL", "openai/gpt-oss-120b")
 SYSTEM_PROMPT = (
     "You are a financial news analyst. Given recent headlines for a stock "
     "ticker, assess the likely short-term directional sentiment. "

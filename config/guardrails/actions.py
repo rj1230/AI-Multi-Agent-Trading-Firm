@@ -20,7 +20,6 @@ from nemoguardrails.actions import action
 logger = logging.getLogger(__name__)
 
 COHERENCE_CHECK_MODEL = os.getenv("GROQ_GUARDRAILS_MODEL", "openai/gpt-oss-20b")
-
 COHERENCE_SYSTEM_PROMPT = (
     "You are a strict consistency checker. Given a directional call and its "
     "stated rationale, decide if the rationale actually supports the "

@@ -1,0 +1,51 @@
+[
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-01T09:00:00Z",
+    "url": "https://example.com/aapl-1"
+  },
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-02T09:00:00Z",
+    "url": "https://example.com/aapl-2"
+  },
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-03T09:00:00Z",
+    "url": "https://example.com/aapl-3"
+  },
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-04T09:00:00Z",
+    "url": "https://example.com/aapl-4"
+  },
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-05T09:00:00Z",
+    "url": "https://example.com/aapl-5"
+  },
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-06T09:00:00Z",
+    "url": "https://example.com/aapl-6"
+  },
+  {
+    "title": "Apple reports record iPhone sales, beats earnings estimates",
+    "description": "Strong quarterly results driven by services growth.",
+    "source": "test_fixture",
+    "published_at": "2026-08-07T09:00:00Z",
+    "url": "https://example.com/aapl-7"
+  }
+]

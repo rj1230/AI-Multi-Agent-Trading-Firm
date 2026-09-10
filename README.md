@@ -19,3 +19,6 @@ python -c "import langgraph, yfinance, alpaca"
 ```
 
 See the full architecture + 10-phase build plan for what comes next.
+
+![tests](https://github.com/rj1230/AI-Multi-Agent-Trading-Firm/actions/workflows/tests.yml/badge.svg)
+

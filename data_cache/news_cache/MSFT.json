@@ -1,0 +1,51 @@
+[
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-01T09:00:00Z",
+    "url": "https://example.com/MSFT-1"
+  },
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-02T09:00:00Z",
+    "url": "https://example.com/MSFT-2"
+  },
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-03T09:00:00Z",
+    "url": "https://example.com/MSFT-3"
+  },
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-04T09:00:00Z",
+    "url": "https://example.com/MSFT-4"
+  },
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-05T09:00:00Z",
+    "url": "https://example.com/MSFT-5"
+  },
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-06T09:00:00Z",
+    "url": "https://example.com/MSFT-6"
+  },
+  {
+    "title": "Microsoft cloud revenue beats expectations, Azure growth accelerates",
+    "description": "test fixture",
+    "source": "test_fixture",
+    "published_at": "2026-08-07T09:00:00Z",
+    "url": "https://example.com/MSFT-7"
+  }
+]

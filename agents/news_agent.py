@@ -23,6 +23,14 @@ after Pydantic validation succeeds, and a failed coherence check falls
 straight to neutral/hold rather than retrying (unlike the JSON-parse
 retry above, retrying the same prompt would likely reproduce the same
 contradiction).
+
+DEBUG LOGGING: a diagnostic line was added right after fetch_news() to
+confirm whether the zero-articles fallback is firing because there's
+genuinely no news data for the requested (ticker, date) -- e.g. a
+backtest window with no historical news cache -- versus failing further
+downstream (Groq call, coherence check). Requires
+logging.basicConfig(level=logging.INFO) configured somewhere in the
+running process (e.g. in your entry-point script) to actually print.
 """
 
 from __future__ import annotations
@@ -100,6 +108,17 @@ def run_news_agent(ticker: str) -> Signal:
     """Core logic, decoupled from the graph node wrapper so it's directly
     unit-testable without needing a TradingState."""
     news = fetch_news(ticker)
+
+    # --- DIAGNOSTIC: confirms whether the zero-articles fallback below is
+    # firing because there's genuinely no news for this ticker/date, which
+    # is the most likely reason every signal comes back neutral in a
+    # backtest window. Remove once the root cause is confirmed. ---
+    logger.info(
+        "[NewsAgent] ticker=%s is_empty=%s num_articles=%s",
+        ticker,
+        news.is_empty,
+        0 if news.is_empty else len(news.articles),
+    )
 
     if news.is_empty:
         return _fallback_signal("no recent headlines available")

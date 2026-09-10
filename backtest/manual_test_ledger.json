@@ -1,0 +1,12 @@
+{
+  "cash": 80122.68082092285,
+  "positions": {
+    "AAPL": {
+      "shares": 65.5674,
+      "sector": "Tech",
+      "avg_entry_price": 303.1585693359375
+    }
+  },
+  "session_date": "2026-09-09",
+  "session_starting_equity": 100000.0
+}

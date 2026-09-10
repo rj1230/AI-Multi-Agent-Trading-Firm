@@ -125,7 +125,7 @@ def _load_or_fetch_full_history(ticker: str) -> list[OHLCVBar]:
 
     import yfinance as yf
 
-    df = yf.Ticker(ticker).history(period="2y", interval="1d")
+    df = yf.Ticker(ticker).history(period="max", interval="1d")
     bars = [
         OHLCVBar(
             timestamp=idx.to_pydatetime(),

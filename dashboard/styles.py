@@ -1,191 +1,144 @@
 """
-Design tokens + CSS injection for the trading dashboard.
+dashboard/styles.py
 
-Keeping this isolated from app.py means the visual system can be tuned in
-one place without touching layout/data logic — the same separation you'd
-want in any real frontend codebase.
+Central design-token module. Every color, spacing, and font choice used
+across the dashboard lives here — no component should hardcode a hex
+value or px size. This is what keeps the three tabs visually consistent
+as the app grows past Phase 10.
+
+Palette rationale: this is a risk-gated trading system, not a generic
+fintech SaaS. The palette leans toward a "control room" feel — dark
+ledger background, monospace numerics for figures, and a strict
+traffic-light semantic (green/gray/amber/red) that is NEVER used
+decoratively. If a color appears, it means something specific.
 """
 
 import streamlit as st
 
 # ---------------------------------------------------------------------------
-# Design tokens
+# Color tokens
 # ---------------------------------------------------------------------------
-COLOR_BG = "#0E1117"
-COLOR_SURFACE = "#161B22"
-COLOR_SURFACE_ALT = "#1C2230"
-COLOR_BORDER = "#2A2F3A"
-COLOR_TEXT = "#E6E6E6"
-COLOR_TEXT_MUTED = "#8A93A6"
-COLOR_ACCENT = "#3B82F6"
-COLOR_POSITIVE = "#22C55E"
-COLOR_NEGATIVE = "#EF4444"
-COLOR_WARNING = "#F59E0B"
 
-AGENT_COLORS = {
-    "NewsAgent": "#38BDF8",
-    "ChartAgent": "#A78BFA",
-    "SignalMerger": "#F472B6",
-    "RiskAgent": "#F59E0B",
-    "ExecutionAgent": "#22C55E",
+COLOR = {
+    "bg": "#0F1115",  # near-black with a blue undertone
+    "surface": "#161920",  # card background
+    "surface_raised": "#1D2129",  # nested / hovered surface
+    "border": "#2A2E38",
+    "text_primary": "#E8E9ED",
+    "text_secondary": "#8B90A0",
+    "text_muted": "#5C6270",
+    "accent": "#4C8DFF",  # interactive elements only (links, active tab) — never status
+    # Semantic status colors — the single most important system in this app.
+    # These are the ONLY colors allowed to convey pass/fail/neutral meaning.
+    "status_executed": "#3DDC84",  # green — trade went through
+    "status_executed_bg": "#173226",
+    "status_held": "#8B90A0",  # gray — no opinion / neutral hold, NOT a failure state
+    "status_held_bg": "#1B1E26",
+    "status_rejected": "#E8A93D",  # amber — a real rule fired correctly, system protected itself
+    "status_rejected_bg": "#332711",
+    "status_error": "#F0555F",  # red — reserved for actual system errors, never for rejections
+    "status_error_bg": "#341A1D",
+}
+
+FONT = {
+    # A grotesk for UI chrome + labels, a monospace for anything numeric
+    # (equity, prices, percentages) so figures read like ledger entries.
+    "ui": "'IBM Plex Sans', -apple-system, sans-serif",
+    "mono": "'IBM Plex Mono', 'SFMono-Regular', monospace",
+}
+
+SPACING = {"xs": "4px", "sm": "8px", "md": "16px", "lg": "24px", "xl": "32px"}
+
+RADIUS = (
+    "6px"  # small and deliberate — not zero-radius broadsheet, not pill-shaped SaaS
+)
+
+STATUS_MAP = {
+    "executed": ("status_executed", "status_executed_bg", "✓"),
+    "held": ("status_held", "status_held_bg", "–"),
+    "rejected": ("status_rejected", "status_rejected_bg", "▲"),
+    "error": ("status_error", "status_error_bg", "✕"),
 }
 
 
-def inject_css() -> None:
+def status_colors(outcome: str) -> tuple[str, str, str]:
+    """Return (text_color, bg_color, glyph) for a tick outcome.
+
+    Normalized case-insensitively. Unknown outcomes fall back to the
+    neutral 'held' styling rather than red — an unrecognized outcome is
+    a data issue, not necessarily a system error, and shouldn't read as
+    a crash in the UI.
+    """
+    key = outcome.strip().lower()
+    color_key, bg_key, glyph = STATUS_MAP.get(key, STATUS_MAP["held"])
+    return COLOR[color_key], COLOR[bg_key], glyph
+
+
+def inject_base_css() -> None:
+    """Call once at the top of app.py, before rendering any tab content."""
     st.markdown(
         f"""
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
-            html, body, [class*="css"] {{
-                font-family: 'Inter', -apple-system, sans-serif;
-            }}
+        html, body, [class*="css"] {{
+            font-family: {FONT["ui"]};
+            color: {COLOR["text_primary"]};
+        }}
 
-            /* Tighten default Streamlit padding for a denser, app-like feel */
-            .block-container {{
-                padding-top: 1.5rem;
-                padding-bottom: 2rem;
-                max-width: 1400px;
-            }}
+        .stApp {{
+            background-color: {COLOR["bg"]};
+        }}
 
-            /* Header / branding bar */
-            .dash-header {{
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding-bottom: 0.75rem;
-                margin-bottom: 1rem;
-                border-bottom: 1px solid {COLOR_BORDER};
-            }}
-            .dash-header h1 {{
-                font-size: 1.5rem;
-                font-weight: 700;
-                margin: 0;
-                letter-spacing: -0.02em;
-            }}
-            .dash-header .subtitle {{
-                color: {COLOR_TEXT_MUTED};
-                font-size: 0.85rem;
-                margin-top: 0.15rem;
-            }}
+        /* Hide Streamlit's default chrome (hamburger menu, Deploy button,
+           "Made with Streamlit" footer). This is a demo artifact for
+           recruiters, not a deployed multi-user app — that bar reads as
+           unfinished scaffolding, not a deliberate UI choice. */
+        #MainMenu, header[data-testid="stHeader"], footer {{
+            visibility: hidden;
+            height: 0;
+        }}
 
-            /* Status pill */
-            .status-pill {{
-                display: inline-flex;
-                align-items: center;
-                gap: 0.4rem;
-                padding: 0.3rem 0.75rem;
-                border-radius: 999px;
-                font-size: 0.78rem;
-                font-weight: 600;
-                border: 1px solid {COLOR_BORDER};
-                background: {COLOR_SURFACE};
-            }}
-            .status-dot {{
-                width: 7px;
-                height: 7px;
-                border-radius: 50%;
-                display: inline-block;
-            }}
+        /* With the default header hidden, block-container no longer needs
+           to clear a fixed overlay — reclaim that space, but keep enough
+           top padding that content doesn't sit flush against the browser
+           chrome. */
+        .block-container {{
+            padding-top: {SPACING["xl"]};
+            padding-bottom: {SPACING["xl"]};
+            max-width: 1200px;
+        }}
 
-            /* KPI card */
-            .kpi-card {{
-                background: {COLOR_SURFACE};
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 10px;
-                padding: 1rem 1.1rem;
-                height: 100%;
-            }}
-            .kpi-label {{
-                color: {COLOR_TEXT_MUTED};
-                font-size: 0.75rem;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-                margin-bottom: 0.35rem;
-            }}
-            .kpi-value {{
-                font-size: 1.55rem;
-                font-weight: 700;
-                font-family: 'JetBrains Mono', monospace;
-                letter-spacing: -0.01em;
-            }}
-            .kpi-delta {{
-                font-size: 0.8rem;
-                font-weight: 600;
-                margin-top: 0.25rem;
-            }}
-            .kpi-delta.positive {{ color: {COLOR_POSITIVE}; }}
-            .kpi-delta.negative {{ color: {COLOR_NEGATIVE}; }}
-            .kpi-delta.neutral {{ color: {COLOR_TEXT_MUTED}; }}
+        .stTabs [data-baseweb="tab-list"] {{
+            gap: {SPACING["lg"]};
+            border-bottom: 1px solid {COLOR["border"]};
+        }}
+        .stTabs [data-baseweb="tab"] {{
+            height: 40px;
+            font-family: {FONT["ui"]};
+            font-weight: 500;
+            color: {COLOR["text_secondary"]};
+        }}
+        .stTabs [aria-selected="true"] {{
+            color: {COLOR["text_primary"]};
+            border-bottom: 2px solid {COLOR["accent"]};
+        }}
 
-            /* Agent log entries */
-            .log-entry {{
-                display: flex;
-                gap: 0.75rem;
-                padding: 0.65rem 0.8rem;
-                border-radius: 8px;
-                border: 1px solid {COLOR_BORDER};
-                background: {COLOR_SURFACE};
-                margin-bottom: 0.5rem;
-            }}
-            .log-time {{
-                color: {COLOR_TEXT_MUTED};
-                font-family: 'JetBrains Mono', monospace;
-                font-size: 0.75rem;
-                white-space: nowrap;
-                padding-top: 0.1rem;
-            }}
-            .agent-badge {{
-                display: inline-block;
-                padding: 0.12rem 0.5rem;
-                border-radius: 5px;
-                font-size: 0.72rem;
-                font-weight: 700;
-                color: #0E1117;
-                white-space: nowrap;
-            }}
-            .log-message {{
-                color: {COLOR_TEXT};
-                font-size: 0.87rem;
-                line-height: 1.4;
-            }}
-            .log-ticker {{
-                color: {COLOR_TEXT_MUTED};
-                font-weight: 600;
-            }}
+        .mono-fig {{
+            font-family: {FONT["mono"]};
+            font-variant-numeric: tabular-nums;
+        }}
 
-            /* Section header */
-            .section-header {{
-                font-size: 1rem;
-                font-weight: 700;
-                margin: 0.25rem 0 0.75rem 0;
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-            }}
+        .dash-card {{
+            background-color: {COLOR["surface"]};
+            border: 1px solid {COLOR["border"]};
+            border-radius: {RADIUS};
+            padding: {SPACING["md"]};
+        }}
 
-            /* Sidebar branding */
-            .sidebar-brand {{
-                font-size: 1.05rem;
-                font-weight: 700;
-                margin-bottom: 0.1rem;
-            }}
-            .sidebar-tagline {{
-                color: {COLOR_TEXT_MUTED};
-                font-size: 0.75rem;
-                margin-bottom: 1.25rem;
-            }}
-
-            /* Dataframe polish */
-            [data-testid="stDataFrame"] {{
-                border: 1px solid {COLOR_BORDER};
-                border-radius: 8px;
-                overflow: hidden;
-            }}
-
-            footer {{ visibility: hidden; }}
-            #MainMenu {{ visibility: hidden; }}
+        hr {{
+            border-color: {COLOR["border"]};
+        }}
         </style>
         """,
         unsafe_allow_html=True,

@@ -254,3 +254,92 @@ def run_backtest(
         nodes_module._broker_singleton = saved_broker
 
     return result
+
+
+# ---------------------------------------------------------
+# Result serialization (for the Phase 10 dashboard)
+# ---------------------------------------------------------
+
+
+def _serialize_result(result: BacktestResult) -> dict:
+    """Shapes BacktestResult into what dashboard/data.py:load_backtest_results()
+    expects, using backtest/metrics.py for the headline numbers.
+
+    Two known gaps, not fixed here:
+    - buy_hold_curve is left empty — no buy-and-hold baseline is computed
+      yet (would need the ticker's own OHLCV over the same date range).
+    - win_rate will read 0.0 even on runs with real executed trades, since
+      result.trades entries don't carry a "pnl" key yet and
+      metrics.win_rate() correctly skips unscored trades rather than
+      faking a number.
+    """
+    from backtest.metrics import summarize
+
+    equity_values = [equity for _date, equity in result.equity_curve]
+    metrics = summarize(equity_values, result.trades, [])
+
+    return {
+        "sharpe_ratio": metrics["sharpe_ratio"],
+        "win_rate": metrics["win_rate"],
+        "max_drawdown": metrics["max_drawdown"],
+        "total_return": metrics["total_return"],
+        "buy_hold_return": metrics["buy_and_hold_return"],
+        "equity_curve": result.equity_curve,
+        "buy_hold_curve": [],
+        "trades": result.trades,
+        "tick_log": result.tick_log,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+    import json
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="Run a multi-agent trading backtest.")
+    parser.add_argument(
+        "--tickers", type=str, default="AAPL", help="Comma-separated, e.g. AAPL,MSFT"
+    )
+    parser.add_argument("--start", type=str, required=True, help="e.g. 2024-06-03")
+    parser.add_argument("--end", type=str, required=True, help="e.g. 2024-06-10")
+    parser.add_argument("--starting-equity", type=float, default=100_000.0)
+    parser.add_argument("--tick-delay", type=float, default=BACKTEST_TICK_DELAY_SECONDS)
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Output filename stem; defaults to start_end",
+    )
+    parser.add_argument(
+        "--ledger-path", type=str, default="backtest/backtest_ledger.json"
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
+
+    tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+    run_id = args.run_id or f"{args.start}_{args.end}"
+
+    print(f"Running backtest: tickers={tickers} start={args.start} end={args.end}")
+
+    result = run_backtest(
+        tickers=tickers,
+        start_date=args.start,
+        end_date=args.end,
+        starting_equity=args.starting_equity,
+        ledger_path=args.ledger_path,
+        tick_delay_seconds=args.tick_delay,
+    )
+
+    print(
+        f"Backtest complete: {len(result.tick_log)} tick(s) logged, {len(result.trades)} executed trade(s)"
+    )
+
+    out_dir = Path("backtest/results")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{run_id}.json"
+    out_path.write_text(json.dumps(_serialize_result(result), indent=2))
+
+    print(f"Wrote results to {out_path}")

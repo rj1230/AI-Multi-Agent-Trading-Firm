@@ -1,0 +1,93 @@
+{
+  "sharpe_ratio": 0.0,
+  "win_rate": 0.0,
+  "max_drawdown": 0.0,
+  "total_return": 0.0,
+  "buy_hold_return": 0.0,
+  "equity_curve": [
+    [
+      "2024-06-03",
+      100000.0
+    ],
+    [
+      "2024-06-04",
+      100000.0
+    ],
+    [
+      "2024-06-05",
+      100000.0
+    ],
+    [
+      "2024-06-06",
+      100000.0
+    ],
+    [
+      "2024-06-07",
+      100000.0
+    ],
+    [
+      "2024-06-08",
+      100000.0
+    ],
+    [
+      "2024-06-09",
+      100000.0
+    ],
+    [
+      "2024-06-10",
+      100000.0
+    ]
+  ],
+  "buy_hold_curve": [],
+  "trades": [],
+  "tick_log": [
+    {
+      "date": "2024-06-03",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate."
+    },
+    {
+      "date": "2024-06-04",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate."
+    },
+    {
+      "date": "2024-06-05",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 47.8% of equity, cap 20% -> BREACH.; Per-sector cap (Tech): would be 47.8% of equity, cap 40% -> BREACH.; Correlation: ok, no existing holding above 0.7."
+    },
+    {
+      "date": "2024-06-06",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 49.2% of equity, cap 20% -> BREACH.; Per-sector cap (Tech): would be 49.2% of equity, cap 40% -> BREACH.; Correlation: ok, no existing holding above 0.7."
+    },
+    {
+      "date": "2024-06-07",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 47.7% of equity, cap 20% -> BREACH.; Per-sector cap (Tech): would be 47.7% of equity, cap 40% -> BREACH.; Correlation: ok, no existing holding above 0.7."
+    },
+    {
+      "date": "2024-06-08",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 46.8% of equity, cap 20% -> BREACH.; Per-sector cap (Tech): would be 46.8% of equity, cap 40% -> BREACH.; Correlation: ok, no existing holding above 0.7."
+    },
+    {
+      "date": "2024-06-09",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 46.8% of equity, cap 20% -> BREACH.; Per-sector cap (Tech): would be 46.8% of equity, cap 40% -> BREACH.; Correlation: ok, no existing holding above 0.7."
+    },
+    {
+      "date": "2024-06-10",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 46.8% of equity, cap 20% -> BREACH.; Per-sector cap (Tech): would be 46.8% of equity, cap 40% -> BREACH.; Correlation: ok, no existing holding above 0.7."
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "sharpe_ratio": 8.709125385422395,
+  "win_rate": 0.0,
+  "max_drawdown": -0.0014273980306951483,
+  "total_return": 0.004782653737647191,
+  "buy_hold_return": 0.0,
+  "equity_curve": [
+    [
+      "2024-06-03",
+      99770.67108720397
+    ],
+    [
+      "2024-06-04",
+      99953.72233945006
+    ],
+    [
+      "2024-06-05",
+      99986.63297505492
+    ],
+    [
+      "2024-06-06",
+      100142.94384082641
+    ],
+    [
+      "2024-06-07",
+      100000.0
+    ],
+    [
+      "2024-06-08",
+      100247.83966018676
+    ],
+    [
+      "2024-06-09",
+      100247.83966018676
+    ],
+    [
+      "2024-06-10",
+      100247.83966018676
+    ]
+  ],
+  "buy_hold_curve": [],
+  "trades": [],
+  "tick_log": [
+    {
+      "date": "2024-06-03",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L -0.23% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate."
+    },
+    {
+      "date": "2024-06-04",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L -0.05% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate."
+    },
+    {
+      "date": "2024-06-05",
+      "ticker": "AAPL",
+      "outcome": "held_book_reject",
+      "notes": "Book-level per-ticker cap: would be 20.0% of equity, cap 20%.; Rejected at book level -- higher-conviction trades approved this tick already used the available risk budget."
+    },
+    {
+      "date": "2024-06-06",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.14% > threshold -3.00% -> ok.; Sizing: raw risk-based size 253.79 sh ($49,240) resized to 0.00 sh ($0) -- ticker room $-114, sector room $19,914.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.1% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.1% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for AAPL in Tech -- trade rejected, not resized."
+    },
+    {
+      "date": "2024-06-07",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Sizing: raw risk-based size 247.50 sh ($47,679) resized to 0.00 sh ($0) -- ticker room $0, sector room $20,000.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.0% of equity, cap 20% -> ok.; Per-sector cap (Tech): would be 20.0% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for AAPL in Tech -- trade rejected, not resized."
+    },
+    {
+      "date": "2024-06-08",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.25% > threshold -3.00% -> ok.; Sizing: raw risk-based size 240.72 sh ($46,947) resized to 0.00 sh ($0) -- ticker room $-198, sector room $19,851.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.2% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.2% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for AAPL in Tech -- trade rejected, not resized."
+    },
+    {
+      "date": "2024-06-09",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.25% > threshold -3.00% -> ok.; Sizing: raw risk-based size 240.72 sh ($46,947) resized to 0.00 sh ($0) -- ticker room $-198, sector room $19,851.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.2% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.2% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for AAPL in Tech -- trade rejected, not resized."
+    },
+    {
+      "date": "2024-06-10",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.25% > threshold -3.00% -> ok.; Sizing: raw risk-based size 240.72 sh ($46,947) resized to 0.00 sh ($0) -- ticker room $-198, sector room $19,851.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.2% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.2% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for AAPL in Tech -- trade rejected, not resized."
+    }
+  ]
+}

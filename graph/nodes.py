@@ -29,6 +29,7 @@ Design principles:
 6. HoldNode records blocked trades.
 7. Broker implementation is hidden behind the Broker protocol.
 8. PortfolioLedger is the local portfolio source of truth.
+9. NewsAgent also propagates data provenance into TradingState.
 """
 
 from __future__ import annotations
@@ -37,7 +38,11 @@ from typing import Optional
 
 from agents.chart_agent import compute_atr, run_chart_agent
 from agents.execution_agent import run_execution_agent
-from agents.news_agent import run_news_agent
+from agents.news_agent import (
+    NewsAgentResult,
+    run_news_agent,
+    run_news_agent_with_metadata,
+)
 from agents.risk_agent import RiskDecision as RiskAgentDecision
 from agents.risk_agent import run_risk_agent
 from agents.signal_merger import (
@@ -70,26 +75,11 @@ from portfolio.ledger import PortfolioLedger
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Enough history for ATR calculation.
 ATR_LOOKBACK_DAYS = 30
 
 
 # ---------------------------------------------------------------------------
 # Lazy process-level singletons
-# ---------------------------------------------------------------------------
-#
-# LangGraph nodes receive TradingState, not arbitrary infrastructure objects.
-# These lazy singletons therefore provide:
-#
-#   - one loaded risk mandate
-#   - one portfolio ledger
-#   - one broker
-#
-# per running process.
-#
-# This is intentionally kept compatible with the current architecture.
-# A future multi-account/service architecture can replace this with explicit
-# dependency injection.
 # ---------------------------------------------------------------------------
 
 _risk_config_singleton = None
@@ -101,6 +91,7 @@ def _risk_config():
     """
     Load the validated YAML/Pydantic risk configuration once per process.
     """
+
     global _risk_config_singleton
 
     if _risk_config_singleton is None:
@@ -112,10 +103,8 @@ def _risk_config():
 def _ledger() -> PortfolioLedger:
     """
     Return the process-level portfolio ledger.
-
-    The ledger is shared by all graph nodes in this process so RiskAgent
-    and ExecutionAgent operate on the same portfolio state.
     """
+
     global _ledger_singleton
 
     if _ledger_singleton is None:
@@ -124,17 +113,15 @@ def _ledger() -> PortfolioLedger:
     return _ledger_singleton
 
 
-def _price_lookup(ticker: str) -> float:
+def _price_lookup(
+    ticker: str,
+) -> float:
     """
     Return the latest available close for a ticker.
 
-    Used by SimBroker when it needs a current price.
-
-    IMPORTANT:
-    This function is appropriate for the current/live simulation path.
-    Historical backtesting should eventually use a timestamp-aware price
-    lookup so that future prices can never leak into earlier ticks.
+    Historical backtesting should use the simulated-date-aware data facade.
     """
+
     series = fetch_ohlcv(
         ticker,
         lookback_days=1,
@@ -149,16 +136,8 @@ def _price_lookup(ticker: str) -> float:
 def _broker() -> Broker:
     """
     Return the process-level broker.
-
-    LIVE:
-        AlpacaBroker
-
-    BACKTEST/PAPER:
-        SimBroker seeded from the current ledger equity.
-
-    ExecutionAgent depends only on the Broker protocol, not on a concrete
-    broker implementation.
     """
+
     global _broker_singleton
 
     if _broker_singleton is None:
@@ -187,10 +166,8 @@ def _log(
 ) -> list[AgentLogEntry]:
     """
     Create one structured graph log entry.
-
-    Returning a list works with TradingState.agent_logs using operator.add,
-    allowing LangGraph to append logs from each node.
     """
+
     return [
         AgentLogEntry(
             node=node,
@@ -210,11 +187,6 @@ def _to_merger_signal(
 ) -> MergerSignal:
     """
     Convert graph.state.Signal into signal_merger.Signal.
-
-    The graph state uses a strict Signal contract, so once a Signal exists,
-    direction/confidence/rationale are guaranteed to be valid.
-
-    Missing signals fail safe to neutral.
     """
 
     if signal is None:
@@ -236,26 +208,6 @@ def _merged_signal_for_downstream(
 ) -> MergedSignal:
     """
     Reconstruct the richer SignalMerger MergedSignal from TradingState.
-
-    TradingState intentionally stores the common lightweight Signal plus
-    explicit merge_agreement metadata.
-
-    IMPORTANT:
-    Do NOT hardcode agreement=True here.
-
-    The improved SignalMerger distinguishes:
-
-        bullish + bullish -> agreement=True
-        bearish + bearish -> agreement=True
-
-        bullish + neutral -> agreement=False
-        neutral + bullish -> agreement=False
-
-        bullish + bearish -> agreement=False
-        bearish + bullish -> agreement=False
-
-    The actual value produced by SignalMerger is therefore preserved in
-    state.merge_agreement.
     """
 
     merged = state.merged_signal
@@ -285,19 +237,41 @@ def news_agent_node(
     state: TradingState,
 ) -> dict:
     """
-    Run NewsAgent for the current ticker.
+    Run NewsAgent and propagate signal + provenance metadata.
 
-    NewsAgent is responsible for interpreting market/news information and
-    producing a structured directional Signal.
+    Production execution uses the metadata-aware API.
+
+    The legacy run_news_agent symbol remains imported at module scope
+    intentionally because the existing test suite monkeypatches it.
     """
 
-    signal = run_news_agent(state.ticker)
+    result: NewsAgentResult = run_news_agent_with_metadata(state.ticker)
+
+    signal = result.signal
 
     return {
         "news_signal": signal,
+        # ------------------------------------------------------
+        # News provenance.
+        # ------------------------------------------------------
+        "news_availability": result.availability.value,
+        "news_article_count": result.article_count,
+        "news_source": result.source,
+        "news_as_of": result.as_of,
+        # ------------------------------------------------------
+        # Agent log.
+        # ------------------------------------------------------
         "agent_logs": _log(
             "NewsAgent",
-            (f"{signal.direction} (conf={signal.confidence:.2f}): {signal.rationale}"),
+            (
+                f"{signal.direction} "
+                f"(conf={signal.confidence:.2f}); "
+                f"availability={result.availability.value}; "
+                f"articles={result.article_count}; "
+                f"source={result.source}; "
+                f"as_of={result.as_of.isoformat()}: "
+                f"{signal.rationale}"
+            ),
         ),
     }
 
@@ -312,11 +286,6 @@ def chart_agent_node(
 ) -> dict:
     """
     Run the deterministic ChartAgent.
-
-    ChartAgent provides directional technical evidence.
-
-    ATR is deliberately NOT placed in Signal. ATR is a risk/sizing input
-    and is computed separately inside risk_agent_node().
     """
 
     signal = run_chart_agent(state.ticker)
@@ -340,23 +309,6 @@ def signal_merger_node(
 ) -> dict:
     """
     Deterministically combine NewsAgent and ChartAgent signals.
-
-    SignalMerger contains no LLM call.
-
-    Important semantics:
-
-        neutral = no opinion
-
-    Therefore neutral does NOT automatically contradict a directional
-    signal.
-
-    Example:
-
-        News neutral + Chart bullish
-            -> bullish with reduced confidence
-
-        News bullish + Chart bearish
-            -> neutral because this is genuine disagreement
     """
 
     news = _to_merger_signal(
@@ -382,7 +334,6 @@ def signal_merger_node(
 
     return {
         "merged_signal": merged_signal,
-        # Preserve the actual merger metadata.
         "merge_agreement": merged.agreement,
         "agent_logs": _log(
             "SignalMerger",
@@ -410,19 +361,6 @@ def risk_agent_node(
 ) -> dict:
     """
     Run deterministic portfolio/risk checks.
-
-    Responsibilities here:
-
-        1. Load validated risk mandate.
-        2. Read current portfolio.
-        3. Determine ticker sector.
-        4. Fetch OHLCV history.
-        5. Compute ATR.
-        6. Determine entry price.
-        7. Pass merged directional signal + sizing inputs to RiskAgent.
-        8. Store the resulting risk decision and proposed position size.
-
-    RiskAgent remains the gatekeeper between signal generation and execution.
     """
 
     config = _risk_config()
@@ -430,10 +368,6 @@ def risk_agent_node(
     portfolio = _ledger().snapshot()
 
     sector = get_sector(state.ticker)
-
-    # ------------------------------------------------------------------
-    # Fetch enough price history for ATR.
-    # ------------------------------------------------------------------
 
     series = fetch_ohlcv(
         state.ticker,
@@ -447,10 +381,6 @@ def risk_agent_node(
         if (not series.is_empty and series.latest is not None)
         else None
     )
-
-    # ------------------------------------------------------------------
-    # Fail safely if we cannot calculate sizing inputs.
-    # ------------------------------------------------------------------
 
     if atr is None or entry_price is None:
         return {
@@ -468,15 +398,7 @@ def risk_agent_node(
             ),
         }
 
-    # ------------------------------------------------------------------
-    # Retrieve the merged directional signal.
-    # ------------------------------------------------------------------
-
     merged = _merged_signal_for_downstream(state)
-
-    # ------------------------------------------------------------------
-    # Run the deterministic risk engine.
-    # ------------------------------------------------------------------
 
     decision = run_risk_agent(
         merged,
@@ -525,20 +447,13 @@ def execution_agent_node(
     state: TradingState,
 ) -> dict:
     """
-    Execute a trade that has already passed RiskAgent.
-
-    This node should only be reachable through route_after_risk() when
-    TradingState.risk_decision == APPROVED.
+    Execute a trade that passed RiskAgent.
     """
 
     broker = _broker()
 
     merged = _merged_signal_for_downstream(state)
 
-    # The graph routing itself is the gate.
-    #
-    # RiskAgent has already approved this proposal before execution is
-    # reachable. We therefore pass the approved decision downstream.
     risk_decision = RiskAgentDecision(
         approved=True,
         ticker=state.ticker,
@@ -551,10 +466,6 @@ def execution_agent_node(
         merged,
         broker,
     )
-
-    # ------------------------------------------------------------------
-    # Synchronize the local portfolio ledger with the fill.
-    # ------------------------------------------------------------------
 
     if result.executed and result.order is not None:
         fill_price = result.order.filled_avg_price or state.entry_price or 0.0
@@ -571,6 +482,7 @@ def execution_agent_node(
 
     return {
         "execution_notes": result.notes,
+        "execution_success": result.executed,
         "agent_logs": _log(
             "ExecutionAgent",
             result.notes,
@@ -579,7 +491,7 @@ def execution_agent_node(
 
 
 # ---------------------------------------------------------------------------
-# Hold node
+# HoldNode
 # ---------------------------------------------------------------------------
 
 
@@ -594,6 +506,7 @@ def hold_node(
 
     return {
         "execution_notes": reason,
+        "execution_success": False,
         "agent_logs": _log(
             "HoldNode",
             (f"holding {state.ticker}, reason={state.risk_notes}"),
@@ -613,8 +526,6 @@ def route_after_risk(
     Route approved trades to execution.
 
     Everything else goes to HoldNode.
-
-    This is the graph-level execution gate.
     """
 
     if state.risk_decision == RiskDecision.APPROVED:
@@ -626,17 +537,13 @@ def route_after_risk(
 # ---------------------------------------------------------------------------
 # Public infrastructure accessors
 # ---------------------------------------------------------------------------
-#
-# These are useful for the future multi-ticker orchestrator and portfolio
-# coordinator so they can access the SAME risk config, ledger and broker
-# instances used by the individual graph nodes.
-# ---------------------------------------------------------------------------
 
 
 def get_risk_config():
     """
     Return the shared validated risk configuration.
     """
+
     return _risk_config()
 
 
@@ -644,6 +551,7 @@ def get_ledger() -> PortfolioLedger:
     """
     Return the shared portfolio ledger.
     """
+
     return _ledger()
 
 
@@ -651,4 +559,22 @@ def get_broker() -> Broker:
     """
     Return the shared broker.
     """
+
     return _broker()
+
+
+def reset_singletons() -> None:
+    """
+    Reset process-level infrastructure.
+
+    Used by tests/backtests so separate runs do not leak portfolio,
+    broker, or configuration state into each other.
+    """
+
+    global _risk_config_singleton
+    global _ledger_singleton
+    global _broker_singleton
+
+    _risk_config_singleton = None
+    _ledger_singleton = None
+    _broker_singleton = None

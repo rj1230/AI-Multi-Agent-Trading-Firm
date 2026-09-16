@@ -1,8 +1,7 @@
 """
 Shared state for the trading graph.
 
-Design rule from the architecture doc:
-nodes communicate ONLY through this object, never directly with each other.
+Nodes communicate through TradingState.
 
 The state is the contract between:
     NewsAgent
@@ -12,11 +11,8 @@ The state is the contract between:
     ExecutionAgent
     HoldNode
 
-The state is deliberately structured so that the graph remains:
-    - inspectable
-    - replayable
-    - deterministic where required
-    - easy to extend for multi-ticker trading
+The state remains inspectable, replayable, and suitable for
+multi-ticker orchestration.
 """
 
 from __future__ import annotations
@@ -41,17 +37,16 @@ class Signal(BaseModel):
     """
     Canonical directional signal.
 
-    A Signal is always valid once it exists in TradingState.
-
-    `neutral` means the agent has no directional opinion.
-    A missing signal is represented by `Signal | None` at the state level.
+    neutral means the agent has no directional opinion.
     """
 
     direction: Literal["bullish", "bearish", "neutral"]
+
     confidence: float = Field(
         ge=0.0,
         le=1.0,
     )
+
     rationale: str = Field(
         min_length=1,
         max_length=500,
@@ -68,8 +63,8 @@ class TradingState(BaseModel):
     """
     Shared state for one ticker at one point in time.
 
-    Every graph node reads from and writes to this object rather than
-    communicating directly with another node.
+    TradingState is intentionally explicit so that every important
+    transition remains inspectable and replayable.
     """
 
     # ------------------------------------------------------------------
@@ -78,11 +73,8 @@ class TradingState(BaseModel):
 
     ticker: str
 
-    # Important for historical replay/backtesting.
-    # In live mode this represents the current decision timestamp.
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # Optional identifiers for future multi-ticker/concurrent runs.
     run_id: str | None = None
     tick_id: int | None = None
 
@@ -94,9 +86,23 @@ class TradingState(BaseModel):
     chart_signal: Signal | None = None
     merged_signal: Signal | None = None
 
-    # SignalMerger produces richer metadata than graph.state.Signal.
-    # Preserve the actual agreement state instead of reconstructing it.
     merge_agreement: bool | None = None
+
+    # ------------------------------------------------------------------
+    # News provenance
+    # ------------------------------------------------------------------
+
+    # Structured availability from the actual NewsAgent fetch.
+    news_availability: str | None = None
+
+    # Number of eligible articles returned for this exact simulated time.
+    news_article_count: int = 0
+
+    # Source that produced the NewsResult.
+    news_source: str | None = None
+
+    # Timestamp associated with the NewsResult.
+    news_as_of: datetime | None = None
 
     # ------------------------------------------------------------------
     # Risk layer
@@ -112,21 +118,34 @@ class TradingState(BaseModel):
     # Position sizing
     # ------------------------------------------------------------------
 
-    # ATR used by RiskAgent for stop/risk sizing.
     atr: float | None = None
 
-    # Price at which the proposed trade would enter.
     entry_price: float | None = None
 
-    # Sector used for sector concentration checks.
     sector: str | None = None
 
-    # Position size proposed by RiskAgent.
     proposed_shares: float = 0.0
 
     # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
+
+    # None:
+    #     Execution has not been attempted.
+    #
+    # True:
+    #     ExecutionAgent confirmed that the broker order succeeded.
+    #
+    # False:
+    #     ExecutionAgent was reached but the broker execution failed.
+    #
+    # Keeping this separate from risk_decision is important:
+    #
+    #     Risk approved != trade executed
+    #
+    # This field is consumed by tick_runner.py so failed broker
+    # executions are never mislabeled as "executed".
+    execution_success: bool | None = None
 
     execution_notes: str | None = None
 
@@ -134,8 +153,6 @@ class TradingState(BaseModel):
     # Observability
     # ------------------------------------------------------------------
 
-    # operator.add allows LangGraph node outputs to append logs rather
-    # than overwrite logs from previous nodes.
     agent_logs: Annotated[
         list[AgentLogEntry],
         operator.add,

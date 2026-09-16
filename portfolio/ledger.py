@@ -1,26 +1,16 @@
 """
-Local JSON-backed portfolio ledger -- the concrete implementation behind
-"fixed paper balance, positions tracked in a local file" (chosen over
-polling broker.get_account() every run, or a real DB).
+Local JSON-backed portfolio ledger.
 
-Two different "starting" concepts, kept deliberately separate:
-  - PAPER_STARTING_EQUITY (config/settings.py): the account's lifetime
-    opening balance. Set once, never touched again after the ledger file
-    is first created.
-  - session starting equity: equity as of the start of TODAY's session --
-    this is what CircuitBreaker.check() compares against, per the doc's
-    "-3% account equity IN A DAY" rule (section 3). It rolls forward every
-    calendar day, not every run, so a bad day doesn't get diluted by
-    yesterday's gains and a good day doesn't hide today's losses.
+The ledger is the portfolio source of truth for both paper/live operation
+and historical backtesting.
 
-File layout (portfolio/ledger.json by default):
-{
-  "cash": 100000.0,
-  "positions": {"AAPL": {"shares": 10, "sector": "Tech", "avg_entry_price": 190.0}},
-  "session_date": "2026-09-09",
-  "session_starting_equity": 100000.0
-}
+Important:
+- Live/paper sessions use today's real calendar date.
+- Backtests can set ``ledger.simulated_date`` so session accounting follows
+  the historical simulation date rather than the machine's current date.
+- BUY and SELL fills are recorded only after actual broker execution.
 """
+
 from __future__ import annotations
 
 import json
@@ -39,69 +29,132 @@ class PortfolioLedger:
     def __init__(self, starting_equity: float, path: Path = DEFAULT_LEDGER_PATH):
         self.path = Path(path)
         self.starting_equity = starting_equity
+
+        # Historical backtests set this explicitly for every simulated day.
+        # Live/paper mode leaves it as None and therefore uses today's date.
+        self.simulated_date: Optional[date] = None
+
         self._data = self._load_or_init()
 
     def _load_or_init(self) -> dict:
         if self.path.exists():
             return json.loads(self.path.read_text())
+
         data = {
             "cash": self.starting_equity,
             "positions": {},
             "session_date": None,
             "session_starting_equity": self.starting_equity,
         }
+
         self._save(data)
         return data
 
     def _save(self, data: Optional[dict] = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data if data is not None else self._data, indent=2))
+        self.path.write_text(
+            json.dumps(
+                data if data is not None else self._data,
+                indent=2,
+            )
+        )
+
+    def _current_session_date(self) -> str:
+        """
+        Return the date that should govern session accounting.
+
+        Backtests explicitly set ``simulated_date``.
+        Live/paper trading falls back to the real calendar date.
+        """
+        if self.simulated_date is not None:
+            return self.simulated_date.isoformat()
+
+        return date.today().isoformat()
 
     def _mark_to_market(self) -> dict[str, float]:
-        """market_value per held ticker, using the latest close. Falls
-        back to avg_entry_price if a live price can't be fetched, rather
-        than crashing a risk check over a data hiccup."""
-        values = {}
+        """
+        Return market value per held ticker using the latest price visible
+        to the current data-source clock.
+
+        During backtests, data_sources.set_simulated_date() controls the
+        historical cutoff, preventing future prices from leaking into the
+        current simulated session.
+        """
+        values: dict[str, float] = {}
+
         for ticker, pos in self._data["positions"].items():
             try:
-                series = fetch_ohlcv(ticker, lookback_days=1)
-                price = series.latest.close if not series.is_empty else pos["avg_entry_price"]
+                series = fetch_ohlcv(
+                    ticker,
+                    lookback_days=1,
+                )
+
+                if series.is_empty or series.latest is None:
+                    price = pos["avg_entry_price"]
+                else:
+                    price = series.latest.close
+
             except Exception:
                 price = pos["avg_entry_price"]
+
             values[ticker] = price * pos["shares"]
+
         return values
 
     def _roll_session_if_new_day(self, current_equity: float) -> None:
-        today = date.today().isoformat()
-        if self._data.get("session_date") != today:
-            self._data["session_date"] = today
+        """
+        Roll session starting equity when the effective trading date changes.
+
+        The effective date is simulated during backtests and the real date
+        during live/paper operation.
+        """
+        session_date = self._current_session_date()
+
+        if self._data.get("session_date") != session_date:
+            self._data["session_date"] = session_date
             self._data["session_starting_equity"] = current_equity
             self._save()
 
     def snapshot(self) -> PortfolioSnapshot:
-        """Builds a PortfolioSnapshot for RiskAgent/PortfolioRiskCoordinator
-        from current ledger state. Rolls the session starting-equity
-        forward if this is the first call on a new calendar day."""
+        """
+        Build a PortfolioSnapshot for RiskAgent and PortfolioRiskCoordinator.
+
+        The snapshot is marked to market using the current data-source clock,
+        then session starting equity is rolled using the effective session
+        date.
+        """
         market_values = self._mark_to_market()
+
         equity = self._data["cash"] + sum(market_values.values())
+
         self._roll_session_if_new_day(equity)
 
         positions = {
             ticker: Position(
-                ticker=ticker, shares=pos["shares"], sector=pos["sector"],
+                ticker=ticker,
+                shares=pos["shares"],
+                sector=pos["sector"],
                 market_value=market_values[ticker],
             )
             for ticker, pos in self._data["positions"].items()
         }
 
         correlation_matrix = None
+
         tickers = list(self._data["positions"].keys())
+
         if tickers:
             returns_by_ticker = {}
+
             for ticker in tickers:
-                series = fetch_ohlcv(ticker, lookback_days=30)
+                series = fetch_ohlcv(
+                    ticker,
+                    lookback_days=30,
+                )
+
                 if not series.is_empty:
                     returns_by_ticker[ticker] = returns_from_ohlcv(series)
+
             correlation_matrix = update_correlation_matrix(returns_by_ticker)
 
         return PortfolioSnapshot(
@@ -111,33 +164,87 @@ class PortfolioLedger:
             correlation_matrix=correlation_matrix,
         )
 
-    def record_fill(self, ticker: str, side: str, qty: float, price: float, sector: str) -> None:
-        """Called by ExecutionAgent after a broker fill to keep the ledger
-        in sync with what actually happened."""
+    def record_fill(
+        self,
+        ticker: str,
+        side: str,
+        qty: float,
+        price: float,
+        sector: str,
+    ) -> None:
+        """
+        Record an actual broker fill.
+
+        This method is intentionally called only after the broker reports
+        a successful fill.
+        """
+        if qty <= 0:
+            raise ValueError("Fill quantity must be positive.")
+
+        if price <= 0:
+            raise ValueError("Fill price must be positive.")
+
         cost = price * qty
+
         if side == "buy":
+            if cost > self._data["cash"] + 1e-9:
+                raise ValueError(
+                    f"Cannot record BUY for {ticker}: "
+                    f"cost={cost:.2f} exceeds cash={self._data['cash']:.2f}"
+                )
+
             self._data["cash"] -= cost
+
             existing = self._data["positions"].get(ticker)
+
             if existing:
-                new_qty = existing["shares"] + qty
-                new_avg = (existing["avg_entry_price"] * existing["shares"] + cost) / new_qty
+                old_qty = existing["shares"]
+                new_qty = old_qty + qty
+
+                new_avg = (existing["avg_entry_price"] * old_qty + cost) / new_qty
+
                 self._data["positions"][ticker] = {
-                    "shares": new_qty, "sector": sector, "avg_entry_price": new_avg,
+                    "shares": new_qty,
+                    "sector": sector,
+                    "avg_entry_price": new_avg,
                 }
+
             else:
                 self._data["positions"][ticker] = {
-                    "shares": qty, "sector": sector, "avg_entry_price": price,
+                    "shares": qty,
+                    "sector": sector,
+                    "avg_entry_price": price,
                 }
+
         elif side == "sell":
             existing = self._data["positions"].get(ticker)
+
             if not existing:
-                raise ValueError(f"Cannot sell {ticker}: no position on record in the ledger")
+                raise ValueError(
+                    f"Cannot sell {ticker}: no position on record in the ledger"
+                )
+
+            held_qty = existing["shares"]
+
+            if qty > held_qty + 1e-9:
+                raise ValueError(
+                    f"Cannot sell {ticker}: requested {qty} shares, "
+                    f"but only {held_qty} are held."
+                )
+
             self._data["cash"] += cost
-            remaining = existing["shares"] - qty
-            if remaining <= 0:
+
+            remaining = held_qty - qty
+
+            if remaining <= 1e-9:
                 del self._data["positions"][ticker]
             else:
-                self._data["positions"][ticker] = {**existing, "shares": remaining}
+                self._data["positions"][ticker] = {
+                    **existing,
+                    "shares": remaining,
+                }
+
         else:
             raise ValueError(f"Unknown side: {side}")
+
         self._save()

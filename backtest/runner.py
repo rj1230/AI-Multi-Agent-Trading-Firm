@@ -198,6 +198,8 @@ def run_backtest(
                             "date": current.date().isoformat(),
                             "ticker": ticker,
                             "notes": tick_result.notes,
+                            "shares": tick_result.shares,
+                            "price": tick_result.price,
                         }
                     )
 
@@ -265,13 +267,16 @@ def _serialize_result(result: BacktestResult) -> dict:
     """Shapes BacktestResult into what dashboard/data.py:load_backtest_results()
     expects, using backtest/metrics.py for the headline numbers.
 
-    Two known gaps, not fixed here:
+    One known gap, not fixed here:
     - buy_hold_curve is left empty — no buy-and-hold baseline is computed
       yet (would need the ticker's own OHLCV over the same date range).
-    - win_rate will read 0.0 even on runs with real executed trades, since
-      result.trades entries don't carry a "pnl" key yet and
-      metrics.win_rate() correctly skips unscored trades rather than
-      faking a number.
+
+    win_rate is still 0.0 on runs with real executed trades, since
+    result.trades entries don't carry a "pnl" key yet and
+    metrics.win_rate() correctly skips unscored trades rather than
+    faking a number. Adding "shares"/"price" here doesn't fix win_rate —
+    that needs a per-trade P&L calculation, which is a separate piece
+    of work.
     """
     from backtest.metrics import summarize
 

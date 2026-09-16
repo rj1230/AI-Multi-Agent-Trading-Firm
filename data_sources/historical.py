@@ -10,10 +10,18 @@ tests/test_lookahead_bias.py.
 
 OHLCV replay pulls from yfinance (cached locally per ticker so repeated
 backtest runs don't hammer the API). News replay reads from a local JSON
-cache under data/news_cache/<ticker>.json, because NewsAPI's free tier
-does not serve headlines old enough for most backtest windows — you are
-expected to populate that cache yourself (e.g. by archiving live fetches
-over time, or importing a historical news dataset).
+cache under data_cache/news_cache/<ticker>.json, because NewsAPI's free
+tier does not serve headlines old enough for most backtest windows — you
+are expected to populate that cache yourself (e.g. by archiving live
+fetches over time, or importing a historical news dataset).
+
+Important backtest data-quality invariant:
+
+    Missing historical news cache
+        !=
+    Historical period genuinely had zero news.
+
+The NewsResult.availability field explicitly preserves that distinction.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ from pathlib import Path
 from data_sources.schemas import (
     DataSourceMode,
     NewsArticle,
+    NewsAvailability,
     NewsResult,
     OHLCVBar,
     OHLCVSeries,
@@ -61,38 +70,114 @@ def fetch_ohlcv(
 
 
 def fetch_news(ticker: str, simulated_date: datetime) -> NewsResult:
-    """Return only articles published at or before `simulated_date`, read
-    from the local news cache. Missing cache file -> empty result, same
-    as the live zero-articles case."""
+    """
+    Return only articles published at or before `simulated_date`.
+
+    The returned availability explicitly distinguishes:
+
+        UNAVAILABLE
+            No historical cache exists for this ticker.
+
+        AVAILABLE + articles
+            Historical cache exists and matching articles were found.
+
+        AVAILABLE + empty
+            Historical cache exists, but no cached article was published
+            on or before the simulated date.
+
+    No future article is ever exposed to the backtest.
+    """
     cutoff = _ensure_utc(simulated_date)
     cache_path = NEWS_CACHE_DIR / f"{ticker}.json"
 
+    # ---------------------------------------------------------------
+    # No cache = historical news data is unavailable.
+    # This is NOT equivalent to "there was no news."
+    # ---------------------------------------------------------------
     if not cache_path.exists():
         logger.warning(
-            "No historical news cache for %s at %s; returning empty NewsResult",
+            "Historical news unavailable for %s: cache does not exist at %s",
             ticker,
             cache_path,
         )
+
         return NewsResult(
             ticker=ticker,
             articles=[],
             source="historical_replay",
             mode=DataSourceMode.BACKTEST,
             as_of=cutoff,
+            availability=NewsAvailability.UNAVAILABLE,
         )
 
-    with open(cache_path, "r", encoding="utf-8") as f:
-        raw_articles = json.load(f)
+    # ---------------------------------------------------------------
+    # Cache exists, so the source itself is available.
+    # ---------------------------------------------------------------
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            raw_articles = json.load(f)
+    except Exception as e:
+        logger.warning(
+            "Historical news cache failed to load for %s at %s: %s",
+            ticker,
+            cache_path,
+            e,
+        )
 
-    articles = []
-    for a in raw_articles:
+        return NewsResult(
+            ticker=ticker,
+            articles=[],
+            source="historical_replay",
+            mode=DataSourceMode.BACKTEST,
+            as_of=cutoff,
+            availability=NewsAvailability.ERROR,
+        )
+
+    if not isinstance(raw_articles, list):
+        logger.warning(
+            "Historical news cache for %s is not a JSON list: %s",
+            ticker,
+            cache_path,
+        )
+
+        return NewsResult(
+            ticker=ticker,
+            articles=[],
+            source="historical_replay",
+            mode=DataSourceMode.BACKTEST,
+            as_of=cutoff,
+            availability=NewsAvailability.ERROR,
+        )
+
+    articles: list[NewsArticle] = []
+
+    for raw_article in raw_articles:
         try:
-            article = NewsArticle(**a)
+            article = NewsArticle(**raw_article)
         except Exception as e:
-            logger.warning("Skipping malformed cached article for %s: %s", ticker, e)
+            logger.warning(
+                "Skipping malformed cached article for %s: %s",
+                ticker,
+                e,
+            )
             continue
+
+        # -----------------------------------------------------------
+        # Lookahead protection:
+        # future articles are never visible during replay.
+        # -----------------------------------------------------------
         if _ensure_utc(article.published_at) <= cutoff:
             articles.append(article)
+
+    logger.info(
+        "Historical news replay: ticker=%s cutoff=%s "
+        "cached=%s eligible=%s availability=%s",
+        ticker,
+        cutoff.isoformat(),
+        len(raw_articles),
+        len(articles),
+        NewsAvailability.AVAILABLE.value,
+    )
 
     return NewsResult(
         ticker=ticker,
@@ -100,6 +185,7 @@ def fetch_news(ticker: str, simulated_date: datetime) -> NewsResult:
         source="historical_replay",
         mode=DataSourceMode.BACKTEST,
         as_of=cutoff,
+        availability=NewsAvailability.AVAILABLE,
     )
 
 
@@ -126,6 +212,7 @@ def _load_or_fetch_full_history(ticker: str) -> list[OHLCVBar]:
     import yfinance as yf
 
     df = yf.Ticker(ticker).history(period="max", interval="1d")
+
     bars = [
         OHLCVBar(
             timestamp=idx.to_pydatetime(),

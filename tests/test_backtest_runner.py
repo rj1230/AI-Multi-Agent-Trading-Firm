@@ -6,18 +6,19 @@ Regression coverage for:
 1. The backtest lookahead guard in data_sources/__init__.py.
 2. End-to-end RiskAgent position-cap clamping.
 3. Historical session discovery from OHLCV data.
-4. Restoration of backtest singletons and simulated-date state.
+4. Full BUY -> SELL -> closed-position lifecycle.
+5. Realized P&L calculation during historical replay.
+6. Final backtest state capture after dependency cleanup.
+7. Restoration of backtest singletons and simulated-date state.
 
-The historical-data fixture intentionally returns four daily bars. This is
-important because backtest/runner.py builds its session calendar from the
-bars returned by data_sources.fetch_ohlcv(). A fixture that returned only
-the final simulated date would cause the runner to discover only that
-single session and would not exercise the multi-session backtest.
+The historical-data fixtures intentionally respect the simulated-date/as-of
+boundary. This is critical for preventing lookahead bias and for ensuring
+broker fills occur at the correct historical price.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -37,21 +38,11 @@ def _fake_historical_ohlcv(
     lookback_days: int = 30,
 ) -> OHLCVSeries:
     """
-    Return deterministic historical bars for the backtest fixture.
+    Return deterministic historical bars for the ticker-cap test.
 
-    The real backtest runner discovers its session calendar from the OHLCV
-    bars returned here. Therefore the fixture must provide all four sessions
-    used by the integration test rather than returning only the current
-    simulated date.
-
-    For a simulated date of 2026-08-04 this returns:
-
-        2026-08-01
-        2026-08-02
-        2026-08-03
-        2026-08-04
-
-    All bars use the same price so portfolio equity remains deterministic.
+    The fixture provides four historical sessions ending at the supplied
+    simulated date. All bars use the same close price so equity remains
+    deterministic while position sizing and ticker-cap behavior are tested.
     """
 
     del lookback_days
@@ -89,6 +80,12 @@ def _fake_historical_ohlcv(
 
 
 def _fake_bullish_signal(ticker: str) -> Signal:
+    """
+    Return a deterministic bullish signal for the ticker-cap test.
+    """
+
+    del ticker
+
     return Signal(
         direction="bullish",
         confidence=0.8,
@@ -98,27 +95,28 @@ def _fake_bullish_signal(ticker: str) -> Signal:
 
 def test_lookahead_guard_blocks_missing_simulated_date(monkeypatch):
     """
-    Regression test for the Phase 9 lookahead bug.
+    Backtest mode must reject OHLCV access when simulated_date is missing.
 
-    Backtest mode must not silently fall back to the real wall-clock
-    datetime when no simulated_date is supplied.
+    The historical data layer must never silently substitute the real
+    wall-clock time during a backtest because doing so could introduce
+    future information into historical decisions.
     """
 
-    monkeypatch.setenv("TRADING_MODE", "backtest")
+    monkeypatch.setenv(
+        "TRADING_MODE",
+        "backtest",
+    )
+
     set_simulated_date(None)
 
     from data_sources import fetch_ohlcv
 
     try:
-        raised = False
-
-        try:
-            fetch_ohlcv("AAPL", lookback_days=5)
-        except RuntimeError:
-            raised = True
-
-        assert raised, "fetch_ohlcv must raise, not silently use real wall-clock time"
-
+        with pytest.raises(RuntimeError):
+            fetch_ohlcv(
+                "AAPL",
+                lookback_days=5,
+            )
     finally:
         set_simulated_date(None)
 
@@ -128,46 +126,50 @@ def test_backtest_runner_executes_then_clamps_on_ticker_cap(
     monkeypatch,
 ):
     """
-    Verify the complete multi-session backtest and RiskAgent cap behavior.
+    Verify historical execution and RiskAgent ticker-cap clamping.
 
-    With:
+    Configuration:
 
         starting equity = $100,000
         entry price     = $150
         ATR             = 16
         risk fraction   = 1%
+        stop multiple   = 1.5
 
-    the raw proposed position is approximately:
+    Raw risk-based sizing:
 
         ($100,000 * 0.01) / (16 * 1.5)
         = 41.6667 shares
+
+    Position value:
+
+        41.6667 * $150
         = $6,250
 
-    Three fills therefore reach approximately 18.75% of equity.
+    Three executions therefore reach approximately 18.75% of equity.
 
-    The fourth fill would exceed the 20% ticker cap, so RiskAgent must
-    clamp it to the remaining approximately $1,250 of room:
+    The fourth execution would exceed the 20% ticker cap. RiskAgent must
+    therefore clamp the fourth order to the remaining approximately
+    $1,250 of ticker-cap capacity:
 
         $1,250 / $150
         = 8.3333 shares
 
-    The test also verifies that the backtest restores the original graph
-    singletons and clears the simulated date afterward.
+    The test also verifies that the backtest restores all process-level
+    dependencies and clears simulated-date state after completion.
     """
 
-    monkeypatch.setenv("TRADING_MODE", "backtest")
+    monkeypatch.setenv(
+        "TRADING_MODE",
+        "backtest",
+    )
 
-    # Patch the underlying historical implementation. The data_sources
-    # facade dynamically resolves historical.fetch_ohlcv(), so this patch
-    # is shared by all callers in the real pipeline.
     monkeypatch.setattr(
         historical_module,
         "fetch_ohlcv",
         _fake_historical_ohlcv,
     )
 
-    # Keep the integration test deterministic and independent of external
-    # LLM/news/indicator behavior.
     monkeypatch.setattr(
         nodes_module,
         "run_news_agent",
@@ -186,8 +188,6 @@ def test_backtest_runner_executes_then_clamps_on_ticker_cap(
         lambda bars: FAKE_ATR,
     )
 
-    # Save the real singletons so run_backtest() can be verified to restore
-    # them after the historical replay.
     saved_ledger = nodes_module._ledger_singleton
     saved_broker = nodes_module._broker_singleton
     saved_config = nodes_module._risk_config_singleton
@@ -204,7 +204,7 @@ def test_backtest_runner_executes_then_clamps_on_ticker_cap(
     )
 
     # ---------------------------------------------------------------
-    # Session discovery
+    # Historical session discovery
     # ---------------------------------------------------------------
 
     assert len(result.equity_curve) == 4
@@ -227,49 +227,356 @@ def test_backtest_runner_executes_then_clamps_on_ticker_cap(
     assert outcomes["2026-08-01"] == "executed"
     assert outcomes["2026-08-02"] == "executed"
     assert outcomes["2026-08-03"] == "executed"
-
-    # Three fills at approximately 6.25% each produce approximately
-    # 18.75% exposure. The fourth raw order would exceed the 20% cap,
-    # so RiskAgent must CLAMP rather than reject the order.
     assert outcomes["2026-08-04"] == "executed"
 
     # ---------------------------------------------------------------
-    # Fourth-order clamp
+    # Fourth-order ticker-cap clamp
     # ---------------------------------------------------------------
 
-    final_day_notes = result.tick_log[-1]["notes"]
+    final_day = result.tick_log[-1]
 
-    assert "8.333" in final_day_notes
+    assert "8.333" in final_day["notes"]
 
-    # All four days should have produced an actual broker fill.
     assert len(result.trades) == 4
 
     fourth_trade = result.trades[-1]
 
+    expected_fourth_shares = 1250.0 / FAKE_ENTRY_PRICE
+
     assert fourth_trade["shares"] == pytest.approx(
-        1250.0 / FAKE_ENTRY_PRICE,
+        expected_fourth_shares,
         rel=1e-3,
     )
 
     # ---------------------------------------------------------------
-    # Equity
+    # Equity remains approximately unchanged because all four
+    # executions occur at the same historical price.
     # ---------------------------------------------------------------
 
     final_date, final_equity = result.equity_curve[-1]
 
     assert final_date == "2026-08-04"
 
-    # Fixed entry/mark price means there should be essentially no P&L drift.
-    assert abs(final_equity - 100_000.0) < 1.0
+    assert final_equity == pytest.approx(
+        100_000.0,
+        abs=1.0,
+    )
 
     # ---------------------------------------------------------------
-    # Backtest state cleanup
+    # Final state and cleanup
     # ---------------------------------------------------------------
 
     assert nodes_module._ledger_singleton is saved_ledger
     assert nodes_module._broker_singleton is saved_broker
     assert nodes_module._risk_config_singleton is saved_config
 
-    # The simulated-date facade state must also be cleared so a subsequent
-    # run cannot inherit stale historical state.
+    assert get_simulated_date() is None
+
+
+def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    Verify the complete long-position lifecycle.
+
+    Session 1:
+        bullish -> BUY -> position opens at $100
+
+    Session 2:
+        bearish -> SELL -> position closes at $110
+        -> realized P&L is recorded
+
+    Session 3:
+        no AAPL position remains
+
+    The historical fixture exposes only bars whose timestamps are less than
+    or equal to simulated_date. This prevents the broker, agents, or data
+    layer from seeing future prices during historical replay.
+    """
+
+    monkeypatch.setenv(
+        "TRADING_MODE",
+        "backtest",
+    )
+
+    prices = {
+        "2026-08-01": 100.0,
+        "2026-08-02": 110.0,
+        "2026-08-03": 110.0,
+    }
+
+    def fake_historical_ohlcv(
+        ticker: str,
+        simulated_date: datetime,
+        lookback_days: int = 30,
+    ) -> OHLCVSeries:
+        """
+        Return only historical bars available at simulated_date.
+
+        Production invariant:
+
+            bar.timestamp <= simulated_date
+        """
+
+        del lookback_days
+
+        bars: list[OHLCVBar] = []
+
+        for date_key, price in prices.items():
+            timestamp = datetime.fromisoformat(date_key).replace(tzinfo=UTC)
+
+            if timestamp > simulated_date:
+                continue
+
+            bars.append(
+                OHLCVBar(
+                    timestamp=timestamp,
+                    open=price,
+                    high=price + 1.0,
+                    low=price - 1.0,
+                    close=price,
+                    volume=1_000_000,
+                )
+            )
+
+        return OHLCVSeries(
+            ticker=ticker,
+            bars=bars,
+            source="test_fixture",
+            mode=DataSourceMode.BACKTEST,
+            as_of=simulated_date,
+        )
+
+    monkeypatch.setattr(
+        historical_module,
+        "fetch_ohlcv",
+        fake_historical_ohlcv,
+    )
+
+    def fake_signal(ticker: str) -> Signal:
+        """
+        Return the deterministic signal required for lifecycle testing.
+
+        Session 1 is bullish so the strategy opens a long position.
+
+        Sessions 2 and 3 are bearish so the long-only execution path is
+        exercised and the existing position must be closed on Session 2.
+        """
+
+        del ticker
+
+        current = get_simulated_date()
+
+        assert current is not None
+
+        if current.date().isoformat() == "2026-08-01":
+            return Signal(
+                direction="bullish",
+                confidence=0.9,
+                rationale="test buy signal",
+            )
+
+        return Signal(
+            direction="bearish",
+            confidence=0.9,
+            rationale="test exit signal",
+        )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_news_agent",
+        fake_signal,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_chart_agent",
+        fake_signal,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "compute_atr",
+        lambda bars: 10.0,
+    )
+
+    saved_ledger = nodes_module._ledger_singleton
+    saved_broker = nodes_module._broker_singleton
+    saved_config = nodes_module._risk_config_singleton
+
+    from backtest.runner import run_backtest
+
+    result = run_backtest(
+        tickers=["AAPL"],
+        start_date="2026-08-01",
+        end_date="2026-08-03",
+        starting_equity=100_000.0,
+        ledger_path=str(tmp_path / "lifecycle_ledger.json"),
+        tick_delay_seconds=0,
+    )
+
+    # ---------------------------------------------------------------
+    # Session discovery
+    # ---------------------------------------------------------------
+
+    assert len(result.tick_log) == 3
+
+    dates = [entry["date"] for entry in result.tick_log]
+
+    assert dates == [
+        "2026-08-01",
+        "2026-08-02",
+        "2026-08-03",
+    ]
+
+    # ---------------------------------------------------------------
+    # Session 1: BUY
+    # ---------------------------------------------------------------
+
+    day1 = result.tick_log[0]
+
+    assert day1["signal_direction"] == "bullish"
+
+    assert day1["execution_attempted"] is True
+    assert day1["execution_success"] is True
+    assert day1["execution_side"] == "buy"
+
+    assert day1["price"] == pytest.approx(100.0)
+
+    assert day1["remaining_shares"] > 0
+
+    assert day1["position_closed"] is False
+
+    bought_shares = day1["remaining_shares"]
+
+    # A successful BUY must create exactly one execution event.
+    assert len(result.trades) >= 1
+
+    first_trade = result.trades[0]
+
+    assert first_trade["ticker"] == "AAPL"
+    assert first_trade["execution_side"] == "buy"
+    assert first_trade["price"] == pytest.approx(100.0)
+
+    # ---------------------------------------------------------------
+    # Session 2: SELL
+    # ---------------------------------------------------------------
+
+    day2 = result.tick_log[1]
+
+    assert day2["signal_direction"] == "bearish"
+
+    assert day2["execution_attempted"] is True
+    assert day2["execution_success"] is True
+    assert day2["execution_side"] == "sell"
+
+    # The broker must fill at Session 2's historical price rather
+    # than a future Session 3 price.
+    assert day2["price"] == pytest.approx(110.0)
+
+    # The complete long position must be sold.
+    assert day2["remaining_shares"] == pytest.approx(
+        0.0,
+        abs=1e-9,
+    )
+
+    assert day2["position_closed"] is True
+
+    # ---------------------------------------------------------------
+    # Realized P&L
+    # ---------------------------------------------------------------
+
+    expected_pnl = bought_shares * (110.0 - 100.0)
+
+    assert day2["realized_pnl"] == pytest.approx(
+        expected_pnl,
+        rel=1e-6,
+    )
+
+    # The closed-trade collection must contain exactly one completed
+    # round trip.
+    assert len(result.closed_trades) == 1
+
+    closed_trade = result.closed_trades[0]
+
+    assert closed_trade["ticker"] == "AAPL"
+    assert closed_trade["side"] == "sell"
+
+    assert closed_trade["shares"] == pytest.approx(
+        bought_shares,
+        rel=1e-6,
+    )
+
+    assert closed_trade["exit_price"] == pytest.approx(110.0)
+
+    assert closed_trade["average_cost"] == pytest.approx(
+        100.0,
+        rel=1e-6,
+    )
+
+    assert closed_trade["realized_pnl"] == pytest.approx(
+        expected_pnl,
+        rel=1e-6,
+    )
+
+    # ---------------------------------------------------------------
+    # Session 3: position remains closed
+    # ---------------------------------------------------------------
+
+    day3 = result.tick_log[2]
+
+    assert day3["remaining_shares"] == pytest.approx(
+        0.0,
+        abs=1e-9,
+    )
+
+    assert day3["position_closed"] is True
+
+    # No additional execution should be required because the long
+    # position was already closed on Session 2.
+    assert len(result.trades) == 2
+
+    # ---------------------------------------------------------------
+    # Final backtest state
+    #
+    # run_backtest() intentionally restores the temporary broker and
+    # ledger singletons before returning. Therefore the authoritative
+    # final state must be read from BacktestResult.
+    # ---------------------------------------------------------------
+
+    expected_final_equity = 100_000.0 + expected_pnl
+
+    assert result.final_positions == {}
+
+    assert result.final_equity == pytest.approx(
+        expected_final_equity,
+        rel=1e-6,
+    )
+
+    assert result.final_cash == pytest.approx(
+        expected_final_equity,
+        rel=1e-6,
+    )
+
+    assert result.final_realized_pnl == pytest.approx(
+        expected_pnl,
+        rel=1e-6,
+    )
+
+    # The final equity curve point should agree with the captured
+    # final ledger equity.
+    assert result.equity_curve[-1][1] == pytest.approx(
+        result.final_equity,
+        rel=1e-6,
+    )
+
+    # ---------------------------------------------------------------
+    # Backtest dependency cleanup
+    # ---------------------------------------------------------------
+
+    assert nodes_module._ledger_singleton is saved_ledger
+    assert nodes_module._broker_singleton is saved_broker
+    assert nodes_module._risk_config_singleton is saved_config
+
     assert get_simulated_date() is None

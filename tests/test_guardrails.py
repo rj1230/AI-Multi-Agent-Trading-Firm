@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from agents.guardrails import check_signal_coherence, _check_async
+from agents.guardrails import _check_async, check_signal_coherence
 
 
 @pytest.fixture
@@ -29,12 +29,14 @@ class TestCheckSignalCoherence:
         assert reason
 
     def test_neutral_direction_always_coherent(self):
-        coherent, reason = check_signal_coherence("neutral", "mixed signals, no clear read")
+        coherent, reason = check_signal_coherence(
+            "neutral", "mixed signals, no clear read"
+        )
         assert coherent is True
         assert reason == ""
 
     def test_coherent_bullish_with_supporting_rationale(self):
-        coherent, reason = check_signal_coherence(
+        coherent, reason = check_signal_coherence(  # noqa: RUF059
             "bullish", "strong earnings beat and raised guidance"
         )
         assert coherent is True

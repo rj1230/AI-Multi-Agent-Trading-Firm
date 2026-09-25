@@ -1,4 +1,5 @@
 import pytest
+
 from portfolio.circuit_breaker import CircuitBreaker
 
 

@@ -11,10 +11,10 @@ Usage:
 from __future__ import annotations
 
 import pandas as pd
-import vectorbt as vbt
 
+from backtest.metrics import max_drawdown as own_max_drawdown
+from backtest.metrics import sharpe_ratio
 from backtest.runner import run_backtest
-from backtest.metrics import sharpe_ratio, max_drawdown as own_max_drawdown
 
 
 def crosscheck(equity_curve: list[tuple[str, float]]) -> None:

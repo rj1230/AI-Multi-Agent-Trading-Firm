@@ -1,10 +1,10 @@
 import pandas as pd
 import pytest
 
-from config.risk_config import RiskConfig
-from agents.signal_merger import MergedSignal
-from portfolio.state import PortfolioSnapshot, Position
 from agents.risk_agent import compute_capped_size, run_risk_agent
+from agents.signal_merger import MergedSignal
+from config.risk_config import RiskConfig
+from portfolio.state import PortfolioSnapshot, Position
 
 
 @pytest.fixture

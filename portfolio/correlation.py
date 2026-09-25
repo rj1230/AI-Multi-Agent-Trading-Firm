@@ -3,6 +3,7 @@ Maintains/updates the rolling 30-day return correlation matrix across held +
 candidate positions. Flags or downsizes new positions correlated > 0.7 with
 an existing holding.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -36,7 +37,9 @@ def update_correlation_matrix(returns_by_ticker: dict[str, pd.Series]) -> pd.Dat
 
 
 def check_correlation(
-    candidate_ticker: str, held_tickers: list[str], matrix: pd.DataFrame,
+    candidate_ticker: str,
+    held_tickers: list[str],
+    matrix: pd.DataFrame,
     max_correlation: float = 0.7,
 ) -> dict:
     """Returns {'flagged': bool, 'max_correlation': float, 'against': str | None}."""

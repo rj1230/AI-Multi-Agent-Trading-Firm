@@ -7,6 +7,7 @@ holds env-derived values that aren't part of the risk mandate.
 """
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,5 +28,5 @@ LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "false")
 LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY")
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "ai-multi-agent-trading-firm")
 
-PAPER_STARTING_EQUITY = float(os.getenv("PAPER_STARTING_EQUITY", 100_000))
+PAPER_STARTING_EQUITY = float(os.getenv("PAPER_STARTING_EQUITY", "100000"))
 ATR_PERIOD = 14  # bars used for RiskAgent's ATR calculation (graph/nodes.py)

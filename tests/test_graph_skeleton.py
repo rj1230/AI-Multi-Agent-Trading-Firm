@@ -13,7 +13,8 @@ Complements test_nodes.py rather than duplicating it:
     - news provenance propagation
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import graph.nodes as nodes_module
 import portfolio.ledger as ledger_module
 from agents.news_agent import NewsAgentResult
@@ -26,7 +27,6 @@ from data_sources.schemas import (
 from graph.build import build_graph
 from graph.state import RiskDecision, Signal, TradingState
 
-
 FAKE_ENTRY_PRICE = 150.0
 
 
@@ -38,7 +38,7 @@ def _fake_series(
         2026,
         1,
         1,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
     bars = [
@@ -116,7 +116,7 @@ def _setup_common(
                 2026,
                 1,
                 1,
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             ),
         ),
     )
@@ -190,7 +190,7 @@ def test_graph_runs_approved_branch_in_order(
         2026,
         1,
         1,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
 

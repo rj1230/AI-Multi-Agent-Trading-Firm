@@ -6,7 +6,7 @@ gating), not NewsAPI, Groq, or NeMo Guardrails themselves.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from agents.news_agent import run_news_agent
@@ -14,7 +14,7 @@ from data_sources.schemas import DataSourceMode, NewsArticle, NewsResult
 
 
 def _make_news_result(titles: list[str]) -> NewsResult:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return NewsResult(
         ticker="AAPL",
         articles=[

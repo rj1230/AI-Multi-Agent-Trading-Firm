@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from data_sources.schemas import (
@@ -116,7 +116,7 @@ def fetch_news(ticker: str, simulated_date: datetime) -> NewsResult:
     try:
         with open(cache_path, "r", encoding="utf-8") as f:
             raw_articles = json.load(f)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(
             "Historical news cache failed to load for %s at %s: %s",
             ticker,
@@ -154,7 +154,7 @@ def fetch_news(ticker: str, simulated_date: datetime) -> NewsResult:
     for raw_article in raw_articles:
         try:
             article = NewsArticle(**raw_article)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 "Skipping malformed cached article for %s: %s",
                 ticker,
@@ -196,8 +196,8 @@ def fetch_news(ticker: str, simulated_date: datetime) -> NewsResult:
 
 def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _load_or_fetch_full_history(ticker: str) -> list[OHLCVBar]:

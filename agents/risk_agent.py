@@ -34,12 +34,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from config.risk_config import RiskConfig
 from agents.signal_merger import MergedSignal
+from config.risk_config import RiskConfig
 from portfolio.circuit_breaker import CircuitBreaker
 from portfolio.correlation import check_correlation as _check_correlation
 from portfolio.state import PortfolioSnapshot
-
 
 # =============================================================================
 # DATA STRUCTURES

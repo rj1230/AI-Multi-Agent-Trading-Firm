@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -43,7 +43,7 @@ def fetch_ohlcv(
     same call signature as historical.fetch_ohlcv — see
     data_sources/__init__.py, which lets agent code call
     data_sources.fetch_ohlcv(...) without knowing which mode it's in."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     series = _fetch_ohlcv_alpaca(ticker, lookback_days, now)
     if series is not None and not series.is_empty:
@@ -113,7 +113,7 @@ def _fetch_ohlcv_alpaca(
             mode=DataSourceMode.LIVE,
             as_of=now,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Alpaca OHLCV fetch error for %s: %s", ticker, e)
         return None
 
@@ -156,7 +156,7 @@ def _fetch_ohlcv_yfinance(
             mode=DataSourceMode.LIVE,
             as_of=now,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("yfinance OHLCV fetch error for %s: %s", ticker, e)
         return None
 
@@ -170,7 +170,7 @@ def fetch_news(
 
     `simulated_date` is accepted (and ignored) for signature parity with
     historical.fetch_news — see data_sources/__init__.py."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     api_key = os.getenv("NEWSAPI_KEY")
 
     if not api_key:
@@ -196,7 +196,7 @@ def fetch_news(
         )
         resp.raise_for_status()
         data = resp.json()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("NewsAPI fetch error for %s: %s", ticker, e)
         return NewsResult(
             ticker=ticker,
@@ -218,7 +218,7 @@ def fetch_news(
                     url=a["url"],
                 )
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # One malformed article shouldn't sink the whole fetch.
             logger.warning("Skipping malformed article for %s: %s", ticker, e)
             continue

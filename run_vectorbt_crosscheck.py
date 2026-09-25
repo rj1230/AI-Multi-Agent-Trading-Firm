@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 
 import pandas as pd
-import vectorbt as vbt
 
 from backtest.metrics import max_drawdown, sharpe_ratio
 from backtest.runner import run_backtest

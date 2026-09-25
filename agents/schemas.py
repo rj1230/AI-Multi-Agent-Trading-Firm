@@ -5,8 +5,9 @@ shared state; a malformed response triggers one repair-prompt retry, then
 falls back to a neutral/hold signal.
 """
 
-from pydantic import BaseModel
 from typing import Literal
+
+from pydantic import BaseModel
 
 
 class NewsSignal(BaseModel):

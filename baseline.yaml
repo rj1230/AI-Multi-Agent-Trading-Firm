@@ -1,0 +1,12 @@
+experiment_name: baseline
+description: >
+  Full News + Chart + Risk pipeline, no overrides. Phase 1 smoke test for
+  the harness itself — confirms it can run the existing baseline backtest
+  and locate the result JSON.
+data:
+  tickers: [AAPL, MSFT, GOOGL, JPM]
+  start: "2024-06-03"
+  end: "2024-06-28"
+variants:
+  - name: baseline
+    overrides: {}

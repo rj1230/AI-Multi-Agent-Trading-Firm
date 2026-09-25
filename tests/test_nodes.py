@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 import agents.chart_agent as chart_agent_module
 import graph.nodes as nodes_module
@@ -19,7 +21,7 @@ def _series(
     highs=None,
     lows=None,
 ) -> OHLCVSeries:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
 
     highs = highs or [c + 1 for c in closes]
     lows = lows or [c - 1 for c in closes]
@@ -55,7 +57,7 @@ def _mock_news_result(
     """
     Build a deterministic NewsAgentResult for graph/node tests.
 
-    The production graph now consumes NewsAgentResult so that news
+    The production graph consumes NewsAgentResult so that news
     provenance is preserved alongside the directional signal.
     """
     return NewsAgentResult(
@@ -71,7 +73,7 @@ def _mock_news_result(
             2026,
             1,
             1,
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         ),
     )
 
@@ -163,9 +165,9 @@ def test_risk_agent_node_approves_clean_trade(
 ):
     closes = [100 + i for i in range(31)]
 
-    # Wide high/low spread -> larger ATR -> smaller sized position.
-    # This keeps the resulting trade comfortably below the configured
-    # per-ticker/sector caps.
+    # Wide high/low spread -> larger ATR -> smaller position size.
+    # This keeps the resulting trade comfortably below the
+    # configured per-ticker/sector caps.
     highs = [c + 5 for c in closes]
     lows = [c - 5 for c in closes]
 
@@ -223,18 +225,24 @@ def test_full_graph_bullish_signal_executes_via_sim_broker(
         ExecutionAgent
             ↓
         SimBroker
+            ↓
+        PortfolioLedger
 
     Both NewsAgent and ChartAgent produce bullish signals, so the
     SignalMerger agrees and RiskAgent approves the trade.
+
+    The test also verifies the critical execution-state invariant:
+
+        broker shares == ledger shares
+        broker cash   == ledger cash
     """
 
     from graph.build import build_graph
 
-    # Alternating up/down with net upward drift.
-    #
-    # A monotonic uptrend would pin RSI at 100, potentially creating
-    # a technical tie against the SMA signal. This fixture therefore
-    # uses a realistic alternating pattern with positive drift.
+    # ------------------------------------------------------------
+    # Deterministic market data
+    # ------------------------------------------------------------
+
     closes = [100.0]
 
     for i in range(59):
@@ -250,26 +258,31 @@ def test_full_graph_bullish_signal_executes_via_sim_broker(
         lows,
     )
 
-    # ChartAgent uses its own OHLCV dependency.
+    # ------------------------------------------------------------
+    # ChartAgent market-data dependency
+    # ------------------------------------------------------------
+
     monkeypatch.setattr(
         chart_agent_module,
         "fetch_ohlcv",
         lambda t, lookback_days=60: series,
     )
 
-    # RiskAgent uses the graph.nodes OHLCV dependency.
+    # ------------------------------------------------------------
+    # RiskAgent market-data dependency
+    # ------------------------------------------------------------
+
     monkeypatch.setattr(
         nodes_module,
         "fetch_ohlcv",
         lambda t, lookback_days=30: series,
     )
 
-    # IMPORTANT:
-    # news_agent_node now calls run_news_agent_with_metadata(),
-    # not the backward-compatible run_news_agent().
-    #
-    # Mock the complete metadata-aware result so this graph test
-    # never reaches the real news/data-source layer.
+    # ------------------------------------------------------------
+    # NewsAgent dependency
+    # ------------------------------------------------------------
+
+    # Prevent the test from reaching the real news/data-source layer.
     monkeypatch.setattr(
         nodes_module,
         "run_news_agent_with_metadata",
@@ -280,14 +293,30 @@ def test_full_graph_bullish_signal_executes_via_sim_broker(
         ),
     )
 
+    # ------------------------------------------------------------
+    # Isolated ledger
+    # ------------------------------------------------------------
+
+    ledger = ledger_module.PortfolioLedger(
+        starting_equity=100_000.0,
+        path=tmp_path / "ledger.json",
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "_ledger_singleton",
+        ledger,
+    )
+
     monkeypatch.setattr(
         nodes_module,
         "_ledger",
-        lambda: ledger_module.PortfolioLedger(
-            starting_equity=100_000.0,
-            path=tmp_path / "ledger.json",
-        ),
+        lambda: ledger,
     )
+
+    # ------------------------------------------------------------
+    # Fresh broker
+    # ------------------------------------------------------------
 
     monkeypatch.setattr(
         nodes_module,
@@ -301,6 +330,10 @@ def test_full_graph_bullish_signal_executes_via_sim_broker(
         lambda t: closes[-1],
     )
 
+    # ------------------------------------------------------------
+    # Execute graph
+    # ------------------------------------------------------------
+
     graph = build_graph()
 
     result = graph.invoke(
@@ -309,7 +342,17 @@ def test_full_graph_bullish_signal_executes_via_sim_broker(
         )
     )
 
+    # ------------------------------------------------------------
+    # Risk/execution assertions
+    # ------------------------------------------------------------
+
     assert result["risk_decision"] == RiskDecision.APPROVED
+
+    assert result["execution_success"] is True
+
+    # ------------------------------------------------------------
+    # Agent execution path
+    # ------------------------------------------------------------
 
     node_names = [entry.node for entry in result["agent_logs"]]
 
@@ -320,22 +363,62 @@ def test_full_graph_bullish_signal_executes_via_sim_broker(
     assert "ExecutionAgent" in node_names
     assert "HoldNode" not in node_names
 
-    # Verify the new execution-state contract.
-    assert result["execution_success"] is True
+    # ------------------------------------------------------------
+    # News provenance
+    # ------------------------------------------------------------
 
-    # Verify news provenance survives the graph.
     assert result["news_availability"] == NewsAvailability.AVAILABLE.value
+
     assert result["news_article_count"] == 2
     assert result["news_source"] == "test"
+
     assert result["news_as_of"] == datetime(
         2026,
         1,
         1,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
-    # Verify the graph actually produced the expected directional signals.
+    # ------------------------------------------------------------
+    # Signal assertions
+    # ------------------------------------------------------------
+
     assert result["news_signal"].direction == "bullish"
     assert result["chart_signal"].direction == "bullish"
     assert result["merged_signal"].direction == "bullish"
     assert result["merge_agreement"] is True
+
+    # ------------------------------------------------------------
+    # CRITICAL:
+    # Verify actual broker ↔ ledger synchronization.
+    # ------------------------------------------------------------
+
+    broker = nodes_module._broker_singleton
+
+    assert broker is not None
+
+    broker_positions = broker.get_positions()
+
+    # Successful execution must create a broker position.
+    assert "AAPL" in broker_positions
+
+    broker_position = broker_positions["AAPL"]
+
+    assert broker_position.qty > 0
+
+    # Successful execution must also create a ledger position.
+    assert "AAPL" in ledger._data["positions"]
+
+    ledger_position = ledger._data["positions"]["AAPL"]
+
+    assert ledger_position["shares"] > 0
+
+    # The same successful fill must be represented identically.
+    assert broker_position.qty == pytest.approx(ledger_position["shares"])
+
+    # Broker and ledger cash must also agree.
+    assert broker.cash == pytest.approx(ledger._data["cash"])
+
+    # The trade must have consumed some cash.
+    assert broker.cash < 100_000.0
+    assert ledger._data["cash"] < 100_000.0

@@ -13,5 +13,7 @@ class AlpacaClient:
     def get_positions(self):
         raise NotImplementedError
 
-    def place_order(self, ticker: str, qty: float, side: str, order_type: str = "market"):
+    def place_order(
+        self, ticker: str, qty: float, side: str, order_type: str = "market"
+    ):
         raise NotImplementedError

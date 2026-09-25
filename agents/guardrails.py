@@ -73,7 +73,7 @@ async def _check_async(direction: str, rationale: str) -> tuple[bool, str]:
         return bool(result_dict.get("coherent", True)), str(
             result_dict.get("reason", "")
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Guardrails check failed open: %s", e)
         return True, ""
 

@@ -3,6 +3,7 @@ Abstract DataSource interface. Every agent and graph node depends only on
 this — never on yFinance/NewsAPI/Alpaca directly — which is what makes the
 LIVE/BACKTEST mode swap invisible to agent logic.
 """
+
 from abc import ABC, abstractmethod
 
 

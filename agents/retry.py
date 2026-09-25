@@ -8,14 +8,12 @@ one implementation instead of three copies of the same retry-once logic.
 from __future__ import annotations
 
 import logging
-from typing import Callable, TypeVar
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
 
-
-def retry_then_fallback(
+def retry_then_fallback[T](
     attempt: Callable[[], T | None],
     fallback: Callable[[str], T],
     max_retries: int = 1,
@@ -28,7 +26,7 @@ def retry_then_fallback(
     for i in range(max_retries + 1):
         try:
             result = attempt()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             last_reason = str(e)
             logger.warning(
                 "%s attempt %d/%d failed: %s", label, i + 1, max_retries + 1, e

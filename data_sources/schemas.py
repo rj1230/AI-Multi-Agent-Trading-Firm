@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -89,13 +88,13 @@ class OHLCVSeries(BaseModel):
         return len(self.bars) == 0
 
     @property
-    def latest(self) -> Optional[OHLCVBar]:
+    def latest(self) -> OHLCVBar | None:
         return self.bars[-1] if self.bars else None
 
 
 class NewsArticle(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     source: str
     published_at: datetime
     url: str

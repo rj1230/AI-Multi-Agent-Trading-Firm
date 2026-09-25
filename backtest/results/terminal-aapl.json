@@ -1,0 +1,299 @@
+{
+  "sharpe_ratio": 9.165151389911681,
+  "win_rate": null,
+  "closed_trades": 0,
+  "max_drawdown": 0.0,
+  "total_return": 0.0024783966018675496,
+  "buy_hold_return": 0.014739977298928064,
+  "excess_return_vs_buy_and_hold": -0.012261580697060515,
+  "realized_pnl": null,
+  "gross_profit": null,
+  "gross_loss": null,
+  "profit_factor": null,
+  "average_winning_trade": null,
+  "average_losing_trade": null,
+  "final_positions": {
+    "AAPL": {
+      "shares": 103.8186,
+      "market_value": 20247.833311743165
+    }
+  },
+  "final_equity": 100247.83966018676,
+  "final_cash": 80000.0063484436,
+  "final_realized_pnl": 0.0,
+  "equity_curve": [
+    [
+      "2024-06-03",
+      100000.0
+    ],
+    [
+      "2024-06-04",
+      100000.0
+    ],
+    [
+      "2024-06-05",
+      100000.0
+    ],
+    [
+      "2024-06-06",
+      100000.0
+    ],
+    [
+      "2024-06-07",
+      100247.83966018676
+    ]
+  ],
+  "buy_hold_curve": [
+    [
+      "2024-06-03",
+      100000.00000000001
+    ],
+    [
+      "2024-06-04",
+      100164.9348703755
+    ],
+    [
+      "2024-06-05",
+      100948.3020679538
+    ],
+    [
+      "2024-06-06",
+      100231.92502374388
+    ],
+    [
+      "2024-06-07",
+      101473.99772989281
+    ]
+  ],
+  "trades": [
+    {
+      "date": "2024-06-06",
+      "ticker": "AAPL",
+      "notes": "Order SIM-1 filled for 103.8186 shares of AAPL.",
+      "shares": 103.8186,
+      "price": 192.64364624023438,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 2.6936045033527654,
+      "sector": "Tech",
+      "execution_attempted": true,
+      "execution_success": true,
+      "execution_side": "buy",
+      "average_cost": 192.64364624023438,
+      "realized_pnl": 0.0,
+      "remaining_shares": 103.8186,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-06T04:00:00+00:00"
+    }
+  ],
+  "closed_trade_events": [],
+  "tick_log": [
+    {
+      "date": "2024-06-03",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 192.19789123535156,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 2.6631807919070445,
+      "entry_price": 192.19789123535156,
+      "sector": "Tech",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": 0.0,
+      "position_closed": true,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-03T04:00:00+00:00"
+    },
+    {
+      "date": "2024-06-04",
+      "ticker": "AAPL",
+      "outcome": "held_book_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Sizing: raw risk-based size 248.54 sh ($47,848) resized to 103.89 sh ($20,000) -- ticker room $20,000, sector room $40,000.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.0% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.0% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; Book-level per-ticker cap: would be 20.0% of equity, cap 20%.; Rejected at book level -- higher-conviction trades approved this tick already used the available risk budget.",
+      "shares": 0.0,
+      "price": 192.514892578125,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 2.682286211692132,
+      "entry_price": 192.514892578125,
+      "sector": "Tech",
+      "proposed_shares": 103.8881,
+      "risk_decision": "approved",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 248.54 sh ($47,848) resized to 103.89 sh ($20,000) -- ticker room $20,000, sector room $40,000.",
+        "Concurrent positions: 0 open, max 3 -> ok.",
+        "Per-ticker cap (AAPL): would be 20.0% of equity, cap 20% -> BREACH (no room left).",
+        "Per-sector cap (Tech): would be 20.0% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7.",
+        "Book-level per-ticker cap: would be 20.0% of equity, cap 20%.",
+        "Rejected at book level -- higher-conviction trades approved this tick already used the available risk budget."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": 0.0,
+      "position_closed": true,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-04T04:00:00+00:00"
+    },
+    {
+      "date": "2024-06-05",
+      "ticker": "AAPL",
+      "outcome": "held_book_reject",
+      "notes": "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.; Sizing: raw risk-based size 253.42 sh ($49,170) resized to 103.08 sh ($20,000) -- ticker room $20,000, sector room $40,000.; Concurrent positions: 0 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.0% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.0% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; Book-level per-ticker cap: would be 20.0% of equity, cap 20%.; Rejected at book level -- higher-conviction trades approved this tick already used the available risk budget.",
+      "shares": 0.0,
+      "price": 194.0205078125,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 2.6306333796066355,
+      "entry_price": 194.0205078125,
+      "sector": "Tech",
+      "proposed_shares": 103.0819,
+      "risk_decision": "approved",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 253.42 sh ($49,170) resized to 103.08 sh ($20,000) -- ticker room $20,000, sector room $40,000.",
+        "Concurrent positions: 0 open, max 3 -> ok.",
+        "Per-ticker cap (AAPL): would be 20.0% of equity, cap 20% -> BREACH (no room left).",
+        "Per-sector cap (Tech): would be 20.0% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7.",
+        "Book-level per-ticker cap: would be 20.0% of equity, cap 20%.",
+        "Rejected at book level -- higher-conviction trades approved this tick already used the available risk budget."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": 0.0,
+      "position_closed": true,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-05T04:00:00+00:00"
+    },
+    {
+      "date": "2024-06-06",
+      "ticker": "AAPL",
+      "outcome": "executed",
+      "notes": "Order SIM-1 filled for 103.8186 shares of AAPL.",
+      "shares": 103.8186,
+      "price": 192.64364624023438,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 2.6936045033527654,
+      "entry_price": 192.64364624023438,
+      "sector": "Tech",
+      "proposed_shares": 103.8186,
+      "risk_decision": "approved",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 247.50 sh ($47,679) resized to 103.82 sh ($20,000) -- ticker room $20,000, sector room $40,000.",
+        "Concurrent positions: 0 open, max 3 -> ok.",
+        "Per-ticker cap (AAPL): would be 20.0% of equity, cap 20% -> ok.",
+        "Per-sector cap (Tech): would be 20.0% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7."
+      ],
+      "execution_attempted": true,
+      "execution_success": true,
+      "execution_side": "buy",
+      "average_cost": 192.64364624023438,
+      "realized_pnl": 0.0,
+      "remaining_shares": 103.8186,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-06T04:00:00+00:00"
+    },
+    {
+      "date": "2024-06-07",
+      "ticker": "AAPL",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.25% > threshold -3.00% -> ok.; Sizing: raw risk-based size 240.72 sh ($46,947) resized to 0.00 sh ($0) -- ticker room $0, sector room $19,851.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (AAPL): would be 20.2% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Tech): would be 20.2% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for AAPL in Tech -- trade rejected, not resized.",
+      "shares": 0.0,
+      "price": 195.0308837890625,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 2.7763866878455588,
+      "entry_price": 195.0308837890625,
+      "sector": "Tech",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.25% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 240.72 sh ($46,947) resized to 0.00 sh ($0) -- ticker room $0, sector room $19,851.",
+        "Concurrent positions: 1 open, max 3 -> ok.",
+        "Per-ticker cap (AAPL): would be 20.2% of equity, cap 20% -> BREACH (no room left).",
+        "Per-sector cap (Tech): would be 20.2% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7.",
+        "No cap room remains for AAPL in Tech -- trade rejected, not resized."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": 103.8186,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-07T04:00:00+00:00"
+    }
+  ],
+  "diagnostics": {
+    "tick_count": 5,
+    "outcome_counts": {
+      "held_local_reject": 2,
+      "held_book_reject": 2,
+      "executed": 1
+    },
+    "risk_approvals": 3,
+    "local_rejections": 2,
+    "coordinator_approvals": 1,
+    "book_rejections": 2,
+    "execution_attempts": 1,
+    "execution_successes": 1,
+    "execution_failures": 0,
+    "execution_events": 1,
+    "closed_trades": 0
+  },
+  "news_availability": {
+    "AAPL": {
+      "sessions": 5,
+      "available_sessions": 5,
+      "unavailable_sessions": 0,
+      "error_sessions": 0,
+      "articles_seen": 0,
+      "status": "available"
+    }
+  }
+}

@@ -10,9 +10,10 @@ ExecutionAgent's retry-after-timeout path), SimBroker returns the
 original fill instead of double-executing -- this exists specifically to
 answer the doc's Phase 6 self-check about double-submission on retry.
 """
+
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from broker.protocol import AccountInfo, BrokerPosition, OrderResult, OrderSide
 
@@ -26,8 +27,11 @@ class SimBroker:
         self._next_order_id = 1
 
     def submit_order(
-        self, ticker: str, side: OrderSide, qty: float,
-        client_order_id: Optional[str] = None,
+        self,
+        ticker: str,
+        side: OrderSide,
+        qty: float,
+        client_order_id: str | None = None,
     ) -> OrderResult:
         if client_order_id and client_order_id in self._orders_by_client_id:
             return self._orders_by_client_id[client_order_id]
@@ -49,8 +53,12 @@ class SimBroker:
     def _fill_buy(self, order_id, ticker, qty, price, cost) -> OrderResult:
         if cost > self.cash:
             return OrderResult(
-                order_id=order_id, ticker=ticker, side="buy", qty=qty,
-                status="rejected", raw={"reason": "insufficient cash"},
+                order_id=order_id,
+                ticker=ticker,
+                side="buy",
+                qty=qty,
+                status="rejected",
+                raw={"reason": "insufficient cash"},
             )
         self.cash -= cost
         existing = self._positions.get(ticker)
@@ -58,15 +66,25 @@ class SimBroker:
             new_qty = existing.qty + qty
             new_avg = (existing.avg_entry_price * existing.qty + cost) / new_qty
             self._positions[ticker] = BrokerPosition(
-                ticker=ticker, qty=new_qty, market_value=new_qty * price, avg_entry_price=new_avg,
+                ticker=ticker,
+                qty=new_qty,
+                market_value=new_qty * price,
+                avg_entry_price=new_avg,
             )
         else:
             self._positions[ticker] = BrokerPosition(
-                ticker=ticker, qty=qty, market_value=cost, avg_entry_price=price,
+                ticker=ticker,
+                qty=qty,
+                market_value=cost,
+                avg_entry_price=price,
             )
         return OrderResult(
-            order_id=order_id, ticker=ticker, side="buy", qty=qty,
-            status="filled", filled_avg_price=price,
+            order_id=order_id,
+            ticker=ticker,
+            side="buy",
+            qty=qty,
+            status="filled",
+            filled_avg_price=price,
         )
 
     def _fill_sell(self, order_id, ticker, qty, price, cost) -> OrderResult:
@@ -74,8 +92,12 @@ class SimBroker:
         held_qty = existing.qty if existing else 0.0
         if qty > held_qty:
             return OrderResult(
-                order_id=order_id, ticker=ticker, side="sell", qty=qty,
-                status="rejected", raw={"reason": "insufficient shares"},
+                order_id=order_id,
+                ticker=ticker,
+                side="sell",
+                qty=qty,
+                status="rejected",
+                raw={"reason": "insufficient shares"},
             )
         self.cash += cost
         remaining = held_qty - qty
@@ -83,12 +105,18 @@ class SimBroker:
             del self._positions[ticker]
         else:
             self._positions[ticker] = BrokerPosition(
-                ticker=ticker, qty=remaining, market_value=remaining * price,
+                ticker=ticker,
+                qty=remaining,
+                market_value=remaining * price,
                 avg_entry_price=existing.avg_entry_price,
             )
         return OrderResult(
-            order_id=order_id, ticker=ticker, side="sell", qty=qty,
-            status="filled", filled_avg_price=price,
+            order_id=order_id,
+            ticker=ticker,
+            side="sell",
+            qty=qty,
+            status="filled",
+            filled_avg_price=price,
         )
 
     def get_positions(self) -> dict[str, BrokerPosition]:

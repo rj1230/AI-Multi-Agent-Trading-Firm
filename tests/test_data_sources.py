@@ -14,25 +14,24 @@ Coverage:
 7. Live and historical data-source modules expose the expected interface.
 """
 
-from datetime import datetime, timedelta, timezone
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from data_sources import historical
 from data_sources.schemas import (
     DataSourceMode,
     NewsAvailability,
-    NewsArticle,
     NewsResult,
     OHLCVBar,
     OHLCVSeries,
 )
-from data_sources import historical
 
 
 def test_no_lookahead_bias_ohlcv(monkeypatch, tmp_path):
     """No bar in the replayed series may be timestamped after simulated_date."""
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
 
     bars = [
         OHLCVBar(
@@ -43,7 +42,7 @@ def test_no_lookahead_bias_ohlcv(monkeypatch, tmp_path):
             close=100,
             volume=1000,
         )
-        for i in range(0, 10)
+        for i in range(10)
     ]
 
     # Feed in ascending order, as _load_or_fetch_full_history would produce.
@@ -71,7 +70,7 @@ def test_no_lookahead_bias_ohlcv(monkeypatch, tmp_path):
 def test_lookahead_bias_test_catches_a_real_leak(monkeypatch):
     """Sanity check on the test itself: deliberately inject a future bar
     and confirm the assertion actually fails."""
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
     simulated_date = now - timedelta(days=4)
 
     leaked_future_bar = OHLCVBar(
@@ -90,7 +89,7 @@ def test_lookahead_bias_test_catches_a_real_leak(monkeypatch):
 def test_no_lookahead_bias_news(tmp_path, monkeypatch):
     """Historical news replay must never expose a future article."""
     ticker = "AAPL"
-    now = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, tzinfo=UTC)
 
     cache_dir = tmp_path / "news_cache"
     cache_dir.mkdir()
@@ -161,7 +160,7 @@ def test_missing_historical_news_cache_is_unavailable(
         2024,
         10,
         15,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
     result = historical.fetch_news(
@@ -199,7 +198,7 @@ def test_existing_cache_with_no_eligible_articles_is_available(
         2024,
         10,
         15,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
     future_article = {
@@ -256,7 +255,7 @@ def test_historical_news_returns_only_eligible_articles(
         15,
         12,
         0,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )
 
     articles = [

@@ -1,4 +1,5 @@
 import pytest
+
 from agents.signal_merger import Signal, merge_signals
 
 

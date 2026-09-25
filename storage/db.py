@@ -2,7 +2,6 @@
 DB connection/ORM layer for persisting trades, agent_logs, traces, and
 portfolio snapshots. SQLite to start; interface stays swappable to Postgres.
 """
-import sqlite3
 
 
 def get_connection(db_path: str = "storage/trading_firm.db"):

@@ -1,0 +1,22 @@
+{
+  "cash": 60000.01906741333,
+  "positions": {
+    "MSFT": {
+      "ticker": "MSFT",
+      "shares": 49.2178,
+      "sector": "Tech",
+      "average_cost": 406.3568115234375,
+      "market_value": 20499.60272008667
+    },
+    "GOOGL": {
+      "ticker": "GOOGL",
+      "shares": 116.5924,
+      "sector": "Tech",
+      "average_cost": 171.53770446777344,
+      "market_value": 20148.97815770874
+    }
+  },
+  "session_date": "2024-06-03",
+  "session_starting_equity": 100000.0,
+  "realized_pnl": 0.0
+}

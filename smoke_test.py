@@ -52,7 +52,7 @@ def check_alpaca(api_key: str, secret_key: str) -> None:
         # at live trading during development.
         client = TradingClient(api_key, secret_key, paper=True)
         account = client.get_account()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"[FAIL] Alpaca auth/connection failed: {e}")
         sys.exit(1)
 
@@ -71,7 +71,7 @@ def check_newsapi(api_key: str, query: str = "AAPL") -> None:
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"[FAIL] NewsAPI request failed: {e}")
         sys.exit(1)
 

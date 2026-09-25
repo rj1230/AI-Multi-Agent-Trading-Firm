@@ -2,6 +2,7 @@
 Main Streamlit entrypoint. Wires dashboard/data.py's adapter loaders into
 dashboard/ui_components.py's presentation functions across three tabs.
 """
+
 from __future__ import annotations
 
 import sys
@@ -32,7 +33,9 @@ def _sample_badge(is_sample: bool):
         st.caption("[sample] No real result recorded for this section yet.")
 
 
-st.set_page_config(page_title="AI Multi-Agent Trading Firm", page_icon="\U0001f4c8", layout="wide")
+st.set_page_config(
+    page_title="AI Multi-Agent Trading Firm", page_icon="\U0001f4c8", layout="wide"
+)
 inject_base_css()
 
 st.title("AI Multi-Agent Trading Firm")
@@ -45,7 +48,9 @@ if not has_real_data():
         "`backtest/export_for_dashboard.py` to see real results."
     )
 
-tab_overview, tab_reasoning, tab_backtest = st.tabs(["Overview", "Reasoning Feed", "Backtest Report"])
+tab_overview, tab_reasoning, tab_backtest = st.tabs(
+    ["Overview", "Reasoning Feed", "Backtest Report"]
+)
 
 with tab_overview:
     summary = load_account_summary()
@@ -60,7 +65,9 @@ with tab_overview:
     ui.recent_activity_list(load_recent_ticks(max_rows=10))
 
 with tab_reasoning:
-    st.caption("Every trade or hold decision, with the specific rule that approved or blocked it — not just the final verdict.")
+    st.caption(
+        "Every trade or hold decision, with the specific rule that approved or blocked it — not just the final verdict."
+    )
     _sample_badge(is_backtest_sample())
     filtered_cards = ui.outcome_filter(load_reasoning_cards())
     if not filtered_cards:

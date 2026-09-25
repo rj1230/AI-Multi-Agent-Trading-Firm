@@ -347,7 +347,7 @@ def _analyze_news(
     try:
         raw = _call_groq(prompt)
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "NewsAgent: Groq call failed for %s: %s",
             ticker,
@@ -372,7 +372,7 @@ def _analyze_news(
                 raw_retry,
             )
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "NewsAgent: Groq retry failed for %s: %s",
                 ticker,

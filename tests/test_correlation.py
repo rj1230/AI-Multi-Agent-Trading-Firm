@@ -1,22 +1,33 @@
+from datetime import UTC, datetime, timedelta
+
 import pandas as pd
 import pytest
-from datetime import datetime, timedelta, timezone
 
-from data_sources.schemas import OHLCVBar, OHLCVSeries, DataSourceMode
-from portfolio.correlation import returns_from_ohlcv, update_correlation_matrix, check_correlation
+from data_sources.schemas import DataSourceMode, OHLCVBar, OHLCVSeries
+from portfolio.correlation import (
+    check_correlation,
+    returns_from_ohlcv,
+    update_correlation_matrix,
+)
 
 
 def _make_series(ticker: str, closes: list[float]) -> OHLCVSeries:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     bars = [
         OHLCVBar(
             timestamp=start + timedelta(days=i),
-            open=c, high=c + 1, low=c - 1, close=c, volume=1000,
+            open=c,
+            high=c + 1,
+            low=c - 1,
+            close=c,
+            volume=1000,
         )
         for i, c in enumerate(closes)
     ]
     as_of = bars[-1].timestamp if bars else start
-    return OHLCVSeries(ticker=ticker, bars=bars, source="test", mode=DataSourceMode.LIVE, as_of=as_of)
+    return OHLCVSeries(
+        ticker=ticker, bars=bars, source="test", mode=DataSourceMode.LIVE, as_of=as_of
+    )
 
 
 def test_returns_from_ohlcv_drops_first_nan_row():
@@ -36,15 +47,19 @@ def test_two_tickers_moving_identically_are_perfectly_correlated():
     closes = [100 + i for i in range(10)]  # steady uptrend
     aapl = _make_series("AAPL", closes)
     msft = _make_series("MSFT", closes)  # identical pattern
-    matrix = update_correlation_matrix({
-        "AAPL": returns_from_ohlcv(aapl),
-        "MSFT": returns_from_ohlcv(msft),
-    })
+    matrix = update_correlation_matrix(
+        {
+            "AAPL": returns_from_ohlcv(aapl),
+            "MSFT": returns_from_ohlcv(msft),
+        }
+    )
     assert matrix.loc["AAPL", "MSFT"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_check_correlation_flags_above_threshold():
-    matrix = pd.DataFrame({"AAPL": [1.0, 0.85], "MSFT": [0.85, 1.0]}, index=["AAPL", "MSFT"])
+    matrix = pd.DataFrame(
+        {"AAPL": [1.0, 0.85], "MSFT": [0.85, 1.0]}, index=["AAPL", "MSFT"]
+    )
     result = check_correlation("AAPL", ["MSFT"], matrix, max_correlation=0.7)
     assert result["flagged"] is True
     assert result["against"] == "MSFT"
@@ -52,7 +67,9 @@ def test_check_correlation_flags_above_threshold():
 
 
 def test_check_correlation_passes_below_threshold():
-    matrix = pd.DataFrame({"AAPL": [1.0, 0.3], "MSFT": [0.3, 1.0]}, index=["AAPL", "MSFT"])
+    matrix = pd.DataFrame(
+        {"AAPL": [1.0, 0.3], "MSFT": [0.3, 1.0]}, index=["AAPL", "MSFT"]
+    )
     result = check_correlation("AAPL", ["MSFT"], matrix, max_correlation=0.7)
     assert result["flagged"] is False
 

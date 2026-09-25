@@ -38,7 +38,7 @@ class RiskConfig(BaseModel):
     sector_map: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _sector_cap_not_below_ticker_cap(self) -> "RiskConfig":
+    def _sector_cap_not_below_ticker_cap(self) -> RiskConfig:
         # A sector cap tighter than the ticker cap would make the ticker
         # cap unreachable and is almost certainly a config typo.
         if self.per_sector_cap_pct < self.per_ticker_cap_pct:

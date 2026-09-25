@@ -30,46 +30,40 @@ Design principles:
 7. Broker implementation is hidden behind the Broker protocol.
 8. PortfolioLedger is the local portfolio source of truth.
 9. NewsAgent also propagates data provenance into TradingState.
+10. Portfolio accounting is performed only after confirmed broker fills.
 """
 
 from __future__ import annotations
-
-from typing import Optional
 
 from agents.chart_agent import compute_atr, run_chart_agent
 from agents.execution_agent import run_execution_agent
 from agents.news_agent import (
     NewsAgentResult,
-    run_news_agent,
     run_news_agent_with_metadata,
 )
 from agents.risk_agent import RiskDecision as RiskAgentDecision
 from agents.risk_agent import run_risk_agent
 from agents.signal_merger import (
     MergedSignal,
-    Signal as MergerSignal,
     merge_signals,
 )
-
+from agents.signal_merger import (
+    Signal as MergerSignal,
+)
 from broker.alpaca_broker import AlpacaBroker
 from broker.protocol import Broker
 from broker.sim_broker import SimBroker
-
 from config.risk_config import load_risk_config
 from config.sectors import get_sector
 from config.settings import MODE, PAPER_STARTING_EQUITY
-
 from data_sources import fetch_ohlcv
-
 from graph.state import (
     AgentLogEntry,
     RiskDecision,
     Signal,
     TradingState,
 )
-
 from portfolio.ledger import PortfolioLedger
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -83,8 +77,8 @@ ATR_LOOKBACK_DAYS = 30
 # ---------------------------------------------------------------------------
 
 _risk_config_singleton = None
-_ledger_singleton: Optional[PortfolioLedger] = None
-_broker_singleton: Optional[Broker] = None
+_ledger_singleton: PortfolioLedger | None = None
+_broker_singleton: Broker | None = None
 
 
 def _risk_config():
@@ -119,7 +113,8 @@ def _price_lookup(
     """
     Return the latest available close for a ticker.
 
-    Historical backtesting should use the simulated-date-aware data facade.
+    Historical backtesting should use the simulated-date-aware
+    data facade.
     """
 
     series = fetch_ohlcv(
@@ -207,7 +202,8 @@ def _merged_signal_for_downstream(
     state: TradingState,
 ) -> MergedSignal:
     """
-    Reconstruct the richer SignalMerger MergedSignal from TradingState.
+    Reconstruct the richer SignalMerger MergedSignal
+    from TradingState.
     """
 
     merged = state.merged_signal
@@ -254,8 +250,8 @@ def news_agent_node(
         # ------------------------------------------------------
         # News provenance.
         # ------------------------------------------------------
-        "news_availability": result.availability.value,
-        "news_article_count": result.article_count,
+        "news_availability": (result.availability.value),
+        "news_article_count": (result.article_count),
         "news_source": result.source,
         "news_as_of": result.as_of,
         # ------------------------------------------------------
@@ -430,7 +426,7 @@ def risk_agent_node(
         "atr": atr,
         "entry_price": entry_price,
         "sector": sector,
-        "proposed_shares": decision.proposed_shares,
+        "proposed_shares": (decision.proposed_shares),
         "agent_logs": _log(
             "RiskAgent",
             risk_message,
@@ -448,6 +444,11 @@ def execution_agent_node(
 ) -> dict:
     """
     Execute a trade that passed RiskAgent.
+
+    ExecutionAgent is responsible for broker execution.
+    PortfolioLedger is responsible for portfolio accounting.
+
+    Accounting is created only after a confirmed broker fill.
     """
 
     broker = _broker()
@@ -467,12 +468,17 @@ def execution_agent_node(
         broker,
     )
 
+    # --------------------------------------------------------------
+    # Accounting is created only after a confirmed broker fill.
+    # --------------------------------------------------------------
+    accounting = None
+
     if result.executed and result.order is not None:
         fill_price = result.order.filled_avg_price or state.entry_price or 0.0
 
         fill_sector = state.sector or get_sector(state.ticker)
 
-        _ledger().record_fill(
+        accounting = _ledger().record_fill(
             ticker=state.ticker,
             side=result.order.side,
             qty=result.order.qty,
@@ -483,6 +489,25 @@ def execution_agent_node(
     return {
         "execution_notes": result.notes,
         "execution_success": result.executed,
+        "execution_side": (
+            result.order.side
+            if (result.executed and result.order is not None)
+            else None
+        ),
+        "execution_quantity": (
+            result.order.qty if (result.executed and result.order is not None) else None
+        ),
+        "execution_price": (
+            result.order.filled_avg_price
+            if (result.executed and result.order is not None)
+            else None
+        ),
+        "execution_order_id": (
+            result.order.order_id
+            if (result.executed and result.order is not None)
+            else None
+        ),
+        "accounting": accounting,
         "agent_logs": _log(
             "ExecutionAgent",
             result.notes,

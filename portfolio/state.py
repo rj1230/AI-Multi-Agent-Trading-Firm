@@ -6,9 +6,8 @@ actual OHLCV through the same dual-mode data_sources facade every other
 agent uses, so LIVE and BACKTEST feed RiskAgent identically-shaped data,
 same as everywhere else in the system (see data_sources/schemas.py docstring).
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
@@ -30,10 +29,12 @@ class PortfolioSnapshot(BaseModel):
     equity: float
     starting_equity: float  # equity as of session/day open -- circuit breaker baseline
     positions: dict[str, Position] = {}
-    correlation_matrix: Optional[pd.DataFrame] = None
+    correlation_matrix: pd.DataFrame | None = None
 
 
-def build_correlation_matrix(tickers: list[str], lookback_days: int = 30) -> pd.DataFrame:
+def build_correlation_matrix(
+    tickers: list[str], lookback_days: int = 30
+) -> pd.DataFrame:
     """
     Fetches OHLCV for every ticker (held + any new candidate) and returns
     the rolling correlation matrix RiskAgent's correlation check reads

@@ -14,6 +14,7 @@ Design:
 * Persists structured decision telemetry for every ticker/session.
 * Persists structured execution telemetry for every ticker/session.
 * Persists structured position-accounting telemetry.
+* Persists deterministic TradeTrace audit telemetry for every ticker/session.
 * Separates execution events from completed/closed trades.
 * Produces run-level orchestration diagnostics.
 * Produces realized-P&L and trade-quality performance metrics.
@@ -30,7 +31,7 @@ import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import data_sources
@@ -40,6 +41,7 @@ from config.risk_config import load_risk_config
 from data_sources import set_simulated_date
 from orchestrator.tick_runner import run_tick
 from portfolio.ledger import PortfolioLedger
+from telemetry.trade_trace import TradeTrace
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +52,20 @@ BACKTEST_TICK_DELAY_SECONDS = 1.5
 class BacktestResult:
     """Complete output produced by one historical backtest run."""
 
+    run_id: str = "latest"
+
+    # Performance curves.
     equity_curve: list[tuple[str, float]] = field(default_factory=list)
     buy_hold_curve: list[tuple[str, float]] = field(default_factory=list)
+
+    # Canonical deterministic audit traces.
+    #
+    # One trace is produced for every ticker/session, including:
+    #   - executed trades
+    #   - local risk rejects
+    #   - portfolio-book rejects
+    #   - execution rejects
+    trade_traces: list[dict] = field(default_factory=list)
 
     # Execution events.
     #
@@ -63,7 +77,7 @@ class BacktestResult:
     # An entry is created only when a fill completely closes the position.
     closed_trades: list[dict] = field(default_factory=list)
 
-    # Per ticker/session decision, execution, and accounting telemetry.
+    # Backward-compatible per ticker/session telemetry.
     tick_log: list[dict] = field(default_factory=list)
 
     # Aggregated NewsAgent availability/provenance.
@@ -115,9 +129,25 @@ def _normalize_timestamp(timestamp: datetime) -> datetime:
     """Normalize a timestamp to timezone-aware UTC."""
 
     if timestamp.tzinfo is None:
-        return timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.replace(tzinfo=UTC)
 
-    return timestamp.astimezone(timezone.utc)
+    return timestamp.astimezone(UTC)
+
+
+def _parse_backtest_datetime(value: str) -> datetime:
+    """
+    Parse a backtest datetime/date into timezone-aware UTC.
+
+    Date-only values are interpreted as midnight UTC.
+    Explicit offsets are preserved and normalized to UTC.
+    """
+
+    parsed = datetime.fromisoformat(value)
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+
+    return parsed.astimezone(UTC)
 
 
 def _load_sessions(
@@ -304,7 +334,7 @@ def _record_news_metadata(
 def _finalize_news_status(result: BacktestResult) -> None:
     """Resolve final run-level NewsAgent status per ticker."""
 
-    for _ticker, news_data in result.news_availability.items():
+    for news_data in result.news_availability.values():
         sessions_count = news_data["sessions"]
         available = news_data["available_sessions"]
         unavailable = news_data["unavailable_sessions"]
@@ -367,8 +397,18 @@ def _build_diagnostics(result: BacktestResult) -> dict:
         tick.get("outcome") == "held_book_reject" for tick in result.tick_log
     )
 
+    trace_count = len(result.trade_traces)
+
+    trace_tickers = len(
+        {trace.get("ticker") for trace in result.trade_traces if trace.get("ticker")}
+    )
+
     return {
+        "run_id": result.run_id,
         "tick_count": len(result.tick_log),
+        "trade_trace_count": trace_count,
+        "trade_trace_tickers": trace_tickers,
+        "trace_coverage_complete": trace_count == len(result.tick_log),
         "outcome_counts": dict(outcome_counts),
         "risk_approvals": risk_approvals,
         "local_rejections": local_rejections,
@@ -404,7 +444,10 @@ def _build_execution_event(
         "signal_confidence": tick_result.signal_confidence,
         "merge_agreement": tick_result.merge_agreement,
         "atr": tick_result.atr,
+        "entry_price": tick_result.entry_price,
         "sector": tick_result.sector,
+        "proposed_shares": tick_result.proposed_shares,
+        "risk_decision": tick_result.risk_decision,
         "execution_attempted": tick_result.execution_attempted,
         "execution_success": tick_result.execution_success,
         "execution_side": tick_result.execution_side,
@@ -442,7 +485,6 @@ def _build_closed_trade_event(
         "signal_direction": tick_result.signal_direction,
         "signal_confidence": tick_result.signal_confidence,
         "merge_agreement": tick_result.merge_agreement,
-        "atr": tick_result.atr,
         "notes": tick_result.notes,
         "news_availability": tick_result.news_availability,
         "news_article_count": tick_result.news_article_count,
@@ -451,10 +493,37 @@ def _build_closed_trade_event(
     }
 
 
+def _capture_trade_trace(
+    result: BacktestResult,
+    tick_result,
+) -> None:
+    """
+    Persist the canonical TradeTrace produced by run_tick().
+
+    TradeTrace is intentionally observational. The backtester does not
+    construct or mutate trading decisions from the trace.
+    """
+
+    trace = getattr(tick_result, "trade_trace", None)
+
+    if trace is None:
+        return
+
+    if not isinstance(trace, TradeTrace):
+        raise TypeError(
+            "TickResult.trade_trace must be a TradeTrace instance or None, "
+            f"got {type(trace).__name__}"
+        )
+
+    result.trade_traces.append(trace.to_dict())
+
+
 def _capture_final_state(
     result: BacktestResult,
     ledger: PortfolioLedger,
 ) -> None:
+    """Capture authoritative final portfolio state before cleanup."""
+
     snapshot = ledger.snapshot()
 
     result.final_positions = {
@@ -478,6 +547,7 @@ def run_backtest(
     starting_equity: float = 100_000.0,
     ledger_path: str = "backtest/backtest_ledger.json",
     tick_delay_seconds: float = BACKTEST_TICK_DELAY_SECONDS,
+    run_id: str = "latest",
 ) -> BacktestResult:
     """
     Run the historical multi-agent trading pipeline.
@@ -486,8 +556,7 @@ def run_backtest(
     calendar days.
 
     This function preserves Strategy V1 behavior while recording richer
-    decision, execution, and position-accounting telemetry for research
-    and evaluation.
+    decision, execution, position-accounting, and TradeTrace telemetry.
 
     Runtime lifecycle:
 
@@ -514,9 +583,18 @@ def run_backtest(
     if starting_equity <= 0:
         raise ValueError("starting_equity must be greater than zero.")
 
-    start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+    if not run_id or not run_id.strip():
+        raise ValueError("run_id cannot be empty.")
 
-    end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+    tickers = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
+
+    if not tickers:
+        raise ValueError("At least one non-empty ticker is required.")
+
+    run_id = run_id.strip()
+
+    start = _parse_backtest_datetime(start_date)
+    end = _parse_backtest_datetime(end_date)
 
     if start > end:
         raise ValueError(f"start_date ({start_date}) must be <= end_date ({end_date})")
@@ -581,7 +659,9 @@ def run_backtest(
     nodes_module._ledger_singleton = ledger
     nodes_module._broker_singleton = broker
 
-    result = BacktestResult()
+    result = BacktestResult(
+        run_id=run_id,
+    )
 
     try:
         for session_index, current in enumerate(
@@ -601,9 +681,26 @@ def run_backtest(
                 current.date().isoformat(),
             )
 
-            tick_results = asyncio.run(run_tick(tickers))
+            tick_results = asyncio.run(
+                run_tick(
+                    tickers,
+                    run_id=run_id,
+                    simulated_date=current,
+                )
+            )
 
             for ticker, tick_result in tick_results.items():
+                # ------------------------------------------------------
+                # Canonical TradeTrace.
+                #
+                # Capture this for every ticker/session, regardless of
+                # whether a trade was ultimately executed.
+                # ------------------------------------------------------
+                _capture_trade_trace(
+                    result=result,
+                    tick_result=tick_result,
+                )
+
                 result.tick_log.append(
                     {
                         "date": current.date().isoformat(),
@@ -612,27 +709,26 @@ def run_backtest(
                         "notes": tick_result.notes,
                         "shares": tick_result.shares,
                         "price": tick_result.price,
-                        "signal_direction": (tick_result.signal_direction),
-                        "signal_confidence": (tick_result.signal_confidence),
-                        "merge_agreement": (tick_result.merge_agreement),
+                        "signal_direction": tick_result.signal_direction,
+                        "signal_confidence": tick_result.signal_confidence,
+                        "merge_agreement": tick_result.merge_agreement,
                         "atr": tick_result.atr,
                         "entry_price": tick_result.entry_price,
                         "sector": tick_result.sector,
-                        "proposed_shares": (tick_result.proposed_shares),
-                        "risk_decision": (tick_result.risk_decision),
-                        "risk_notes": (tick_result.risk_notes or []),
-                        "execution_attempted": (tick_result.execution_attempted),
-                        "execution_success": (tick_result.execution_success),
-                        "execution_side": (tick_result.execution_side),
-                        # Position accounting telemetry.
-                        "average_cost": (tick_result.average_cost),
-                        "realized_pnl": (tick_result.realized_pnl),
-                        "remaining_shares": (tick_result.remaining_shares),
-                        "position_closed": (tick_result.position_closed),
-                        "news_availability": (tick_result.news_availability),
-                        "news_article_count": (tick_result.news_article_count),
-                        "news_source": (tick_result.news_source),
-                        "news_as_of": (tick_result.news_as_of),
+                        "proposed_shares": tick_result.proposed_shares,
+                        "risk_decision": tick_result.risk_decision,
+                        "risk_notes": tick_result.risk_notes or [],
+                        "execution_attempted": tick_result.execution_attempted,
+                        "execution_success": tick_result.execution_success,
+                        "execution_side": tick_result.execution_side,
+                        "average_cost": tick_result.average_cost,
+                        "realized_pnl": tick_result.realized_pnl,
+                        "remaining_shares": tick_result.remaining_shares,
+                        "position_closed": tick_result.position_closed,
+                        "news_availability": tick_result.news_availability,
+                        "news_article_count": tick_result.news_article_count,
+                        "news_source": tick_result.news_source,
+                        "news_as_of": tick_result.news_as_of,
                     }
                 )
 
@@ -727,9 +823,10 @@ def _serialize_result(result: BacktestResult) -> dict:
         1. execution-level events
         2. closed-trade events
         3. detailed tick-level telemetry
-        4. aggregated run-level diagnostics
-        5. strategy performance metrics
-        6. final portfolio state
+        4. canonical TradeTrace audit telemetry
+        5. aggregated run-level diagnostics
+        6. strategy performance metrics
+        7. final portfolio state
 
     This allows the UI and research tooling to inspect the decision
     funnel and performance without parsing human-readable notes.
@@ -759,6 +856,10 @@ def _serialize_result(result: BacktestResult) -> dict:
 
     return {
         # --------------------------------------------------------------
+        # Run identity.
+        # --------------------------------------------------------------
+        "run_id": result.run_id,
+        # --------------------------------------------------------------
         # Core performance metrics.
         # --------------------------------------------------------------
         "sharpe_ratio": metrics["sharpe_ratio"],
@@ -775,8 +876,8 @@ def _serialize_result(result: BacktestResult) -> dict:
         "gross_profit": metrics["gross_profit"],
         "gross_loss": metrics["gross_loss"],
         "profit_factor": metrics["profit_factor"],
-        "average_winning_trade": (metrics["average_winning_trade"]),
-        "average_losing_trade": (metrics["average_losing_trade"]),
+        "average_winning_trade": metrics["average_winning_trade"],
+        "average_losing_trade": metrics["average_losing_trade"],
         # --------------------------------------------------------------
         # Final authoritative backtest state.
         #
@@ -805,9 +906,15 @@ def _serialize_result(result: BacktestResult) -> dict:
         # --------------------------------------------------------------
         "closed_trade_events": result.closed_trades,
         # --------------------------------------------------------------
-        # Tick-level decision/execution/accounting telemetry.
+        # Backward-compatible tick-level telemetry.
         # --------------------------------------------------------------
         "tick_log": result.tick_log,
+        # --------------------------------------------------------------
+        # Canonical deterministic TradeTrace telemetry.
+        #
+        # One trace per ticker/session when run_tick() provides one.
+        # --------------------------------------------------------------
+        "trade_traces": result.trade_traces,
         # --------------------------------------------------------------
         # Run-level orchestration diagnostics.
         # --------------------------------------------------------------
@@ -830,7 +937,7 @@ def main() -> None:
     parser.add_argument(
         "--tickers",
         required=True,
-        help=("Comma-separated ticker symbols, e.g. AAPL,MSFT,GOOGL"),
+        help="Comma-separated ticker symbols, e.g. AAPL,MSFT,GOOGL",
     )
 
     parser.add_argument(
@@ -861,7 +968,7 @@ def main() -> None:
     parser.add_argument(
         "--run-id",
         default="latest",
-        help="Identifier used for the result JSON filename.",
+        help="Unique identifier used for the run and result JSON filename.",
     )
 
     parser.add_argument(
@@ -883,6 +990,7 @@ def main() -> None:
         starting_equity=args.starting_equity,
         ledger_path=args.ledger_path,
         tick_delay_seconds=args.tick_delay,
+        run_id=args.run_id,
     )
 
     payload = _serialize_result(result)
@@ -900,6 +1008,7 @@ def main() -> None:
         json.dumps(
             payload,
             indent=2,
+            default=str,
         ),
         encoding="utf-8",
     )
@@ -928,11 +1037,17 @@ def main() -> None:
     print("BACKTEST COMPLETE")
     print("=" * 60)
 
+    print(f"Run ID        : {result.run_id}")
+
     print(f"Sessions      : {len(result.equity_curve)}")
 
     print(f"Executed      : {len(result.trades)}")
 
     print(f"Closed trades : {len(result.closed_trades)}")
+
+    print(f"Trade traces  : {len(result.trade_traces)}")
+
+    print(f"Trace coverage: {diagnostics['trace_coverage_complete']}")
 
     print(f"Realized P&L  : {realized_pnl_display}")
 

@@ -12,6 +12,7 @@ CSV. Until one of those is wired in, unmapped tickers fall back to
 is still a bucket), it just won't group unmapped tickers with their real
 sector peers.
 """
+
 from __future__ import annotations
 
 SECTOR_MAP: dict[str, str] = {

@@ -3,13 +3,13 @@ Data access layer for the dashboard.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from portfolio.ledger import PortfolioLedger, DEFAULT_LEDGER_PATH
+from portfolio.ledger import DEFAULT_LEDGER_PATH, PortfolioLedger
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AGENT_LOGS_DIR = PROJECT_ROOT / "agent_logs"
@@ -21,7 +21,11 @@ REFRESH_INTERVAL_SECONDS = 10
 
 
 def has_real_data() -> bool:
-    return AGENT_LOGS_DIR.exists() or DEFAULT_LEDGER_PATH.exists() or BACKTEST_RESULTS_FILE.exists()
+    return (
+        AGENT_LOGS_DIR.exists()
+        or DEFAULT_LEDGER_PATH.exists()
+        or BACKTEST_RESULTS_FILE.exists()
+    )
 
 
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS)
@@ -42,12 +46,20 @@ def load_agent_logs(max_rows: int = 200) -> pd.DataFrame:
                 break
 
     if not rows:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         rows = [
-            {"timestamp": (now - timedelta(minutes=1)).isoformat(), "agent": "NewsAgent",
-             "ticker": "AAPL", "message": "Sentiment: bullish (earnings beat). [sample data]"},
-            {"timestamp": (now - timedelta(minutes=2)).isoformat(), "agent": "RiskAgent",
-             "ticker": "MSFT", "message": "Signal rejected: exceeds sector cap. [sample data]"},
+            {
+                "timestamp": (now - timedelta(minutes=1)).isoformat(),
+                "agent": "NewsAgent",
+                "ticker": "AAPL",
+                "message": "Sentiment: bullish (earnings beat). [sample data]",
+            },
+            {
+                "timestamp": (now - timedelta(minutes=2)).isoformat(),
+                "agent": "RiskAgent",
+                "ticker": "MSFT",
+                "message": "Signal rejected: exceeds sector cap. [sample data]",
+            },
         ]
 
     df = pd.DataFrame(rows)
@@ -61,7 +73,9 @@ def load_agent_logs(max_rows: int = 200) -> pd.DataFrame:
 def load_positions() -> pd.DataFrame:
     if DEFAULT_LEDGER_PATH.exists():
         try:
-            ledger = PortfolioLedger(starting_equity=100_000.0, path=DEFAULT_LEDGER_PATH)
+            ledger = PortfolioLedger(
+                starting_equity=100_000.0, path=DEFAULT_LEDGER_PATH
+            )
             snapshot = ledger.snapshot()
             if snapshot.positions:
                 rows = [
@@ -70,28 +84,52 @@ def load_positions() -> pd.DataFrame:
                         "shares": round(p.shares, 4),
                         "sector": p.sector,
                         "market_value": round(p.market_value, 2),
-                        "pct_of_equity": round(p.market_value / snapshot.equity * 100, 2) if snapshot.equity else 0,
+                        "pct_of_equity": round(
+                            p.market_value / snapshot.equity * 100, 2
+                        )
+                        if snapshot.equity
+                        else 0,
                     }
                     for p in snapshot.positions.values()
                 ]
                 return pd.DataFrame(rows)
-        except Exception:
+        except Exception:  # noqa: S110,BLE001
             pass
 
-    return pd.DataFrame([
-        {"ticker": "AAPL", "shares": 12, "sector": "Tech", "market_value": 2773.20, "pct_of_equity": 2.77},
-        {"ticker": "JPM", "shares": 15, "sector": "Financials", "market_value": 3036.00, "pct_of_equity": 3.04},
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "ticker": "AAPL",
+                "shares": 12,
+                "sector": "Tech",
+                "market_value": 2773.20,
+                "pct_of_equity": 2.77,
+            },
+            {
+                "ticker": "JPM",
+                "shares": 15,
+                "sector": "Financials",
+                "market_value": 3036.00,
+                "pct_of_equity": 3.04,
+            },
+        ]
+    )
 
 
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS)
 def load_account_summary() -> dict:
     if DEFAULT_LEDGER_PATH.exists():
         try:
-            ledger = PortfolioLedger(starting_equity=100_000.0, path=DEFAULT_LEDGER_PATH)
+            ledger = PortfolioLedger(
+                starting_equity=100_000.0, path=DEFAULT_LEDGER_PATH
+            )
             snapshot = ledger.snapshot()
             daily_pnl = snapshot.equity - snapshot.starting_equity
-            daily_pnl_pct = (daily_pnl / snapshot.starting_equity * 100) if snapshot.starting_equity else 0
+            daily_pnl_pct = (
+                (daily_pnl / snapshot.starting_equity * 100)
+                if snapshot.starting_equity
+                else 0
+            )
             return {
                 "equity": snapshot.equity,
                 "cash": ledger._data.get("cash", 0),
@@ -101,12 +139,17 @@ def load_account_summary() -> dict:
                 "circuit_breaker_ok": daily_pnl_pct > -3.0,
                 "is_sample": False,
             }
-        except Exception:
+        except Exception:  # noqa: S110,BLE001
             pass
 
     return {
-        "equity": 100_588.94, "cash": 90_000.00, "daily_pnl": 588.94, "daily_pnl_pct": 0.59,
-        "open_positions": 1, "circuit_breaker_ok": True, "is_sample": True,
+        "equity": 100_588.94,
+        "cash": 90_000.00,
+        "daily_pnl": 588.94,
+        "daily_pnl_pct": 0.59,
+        "open_positions": 1,
+        "circuit_breaker_ok": True,
+        "is_sample": True,
     }
 
 
@@ -117,27 +160,43 @@ def load_backtest_results():
     if BACKTEST_RESULTS_FILE.exists():
         try:
             equity_df = pd.read_csv(BACKTEST_RESULTS_FILE, parse_dates=["date"])
-        except Exception:
+        except Exception:  # noqa: BLE001
             equity_df = None
     if BACKTEST_TRADES_FILE.exists():
         try:
             trades_df = pd.read_csv(BACKTEST_TRADES_FILE, parse_dates=["date"])
-        except Exception:
+        except Exception:  # noqa: BLE001
             trades_df = None
     if BACKTEST_TICK_LOG_FILE.exists():
         try:
             tick_log_df = pd.read_csv(BACKTEST_TICK_LOG_FILE, parse_dates=["date"])
-        except Exception:
+        except Exception:  # noqa: BLE001
             tick_log_df = None
 
     is_sample = equity_df is None
     if equity_df is None:
-        dates = pd.date_range(end=datetime.now(timezone.utc), periods=7, freq="D")
-        equity_df = pd.DataFrame({"date": dates, "equity": [100000, 100000, 100000, 100000, 100390, 100497, 100589]})
+        dates = pd.date_range(end=datetime.now(UTC), periods=7, freq="D")
+        equity_df = pd.DataFrame(
+            {
+                "date": dates,
+                "equity": [100000, 100000, 100000, 100000, 100390, 100497, 100589],
+            }
+        )
     if trades_df is None:
-        trades_df = pd.DataFrame([{"date": datetime.now(timezone.utc), "ticker": "AAPL", "notes": "[sample data]"}])
+        trades_df = pd.DataFrame(
+            [{"date": datetime.now(UTC), "ticker": "AAPL", "notes": "[sample data]"}]
+        )
     if tick_log_df is None:
-        tick_log_df = pd.DataFrame([{"date": datetime.now(timezone.utc), "ticker": "AAPL", "outcome": "executed", "notes": "[sample data]"}])
+        tick_log_df = pd.DataFrame(
+            [
+                {
+                    "date": datetime.now(UTC),
+                    "ticker": "AAPL",
+                    "outcome": "executed",
+                    "notes": "[sample data]",
+                }
+            ]
+        )
 
     return equity_df, trades_df, tick_log_df, is_sample
 
@@ -229,7 +288,9 @@ def load_portfolio_snapshot():
             sector=row["sector"],
             market_value=row["market_value"],
             pct_of_portfolio=row["pct_of_equity"] / 100,
-            pct_of_ticker_cap=min((row["pct_of_equity"] / 100) / PER_TICKER_CAP_PCT, 1.0),
+            pct_of_ticker_cap=min(
+                (row["pct_of_equity"] / 100) / PER_TICKER_CAP_PCT, 1.0
+            ),
         )
         for _, row in positions_df.iterrows()
     ]
@@ -254,15 +315,19 @@ def load_sector_exposure():
 def load_recent_ticks(max_rows: int = 10):
     _, _, tick_log_df, _ = load_backtest_results()
     cards = []
-    for _, row in tick_log_df.sort_values("date", ascending=False).head(max_rows).iterrows():
+    for _, row in (
+        tick_log_df.sort_values("date", ascending=False).head(max_rows).iterrows()
+    ):
         notes = str(row.get("notes", ""))
-        cards.append(TickCard(
-            ticker=row["ticker"],
-            tick_date=str(row["date"]),
-            outcome=row.get("outcome", "held"),
-            headline_reason=notes[:120],
-            steps=_parse_notes_to_steps(notes),
-        ))
+        cards.append(
+            TickCard(
+                ticker=row["ticker"],
+                tick_date=str(row["date"]),
+                outcome=row.get("outcome", "held"),
+                headline_reason=notes[:120],
+                steps=_parse_notes_to_steps(notes),
+            )
+        )
     return cards
 
 
@@ -282,6 +347,7 @@ def load_backtest_trades():
 
 def load_backtest_summary():
     from backtest.metrics import summarize
+
     equity_df, trades_df, _, _ = load_backtest_results()
     equity_values = equity_df["equity"].tolist()
     metrics = summarize(equity_values, trades_df.to_dict("records"), equity_values)

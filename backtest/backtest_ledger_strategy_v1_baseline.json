@@ -1,0 +1,22 @@
+{
+  "cash": 38450.37787410432,
+  "positions": {
+    "AAPL": {
+      "shares": 101.6095,
+      "sector": "Tech",
+      "avg_entry_price": 217.21619731041844
+    },
+    "MSFT": {
+      "shares": 38.75599999999999,
+      "sector": "Tech",
+      "avg_entry_price": 418.1237353833973
+    },
+    "JPM": {
+      "shares": 92.39869999999999,
+      "sector": "Financials",
+      "avg_entry_price": 234.354249030189
+    }
+  },
+  "session_date": "2026-09-04",
+  "session_starting_equity": 123466.61450773163
+}

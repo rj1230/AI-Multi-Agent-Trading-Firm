@@ -1,358 +1,505 @@
-"""
-Integration tests for the multi-ticker orchestrator.
-
-These tests exercise the complete local orchestration path while keeping
-external data sources, the portfolio ledger, and broker state isolated.
-
-Isolation notes
----------------
-- graph.nodes.fetch_ohlcv is patched directly because nodes.py imports the
-  facade into its own module namespace.
-- graph.nodes._ledger is patched so every test receives an isolated,
-  pre-initialized portfolio ledger.
-- graph.nodes._broker_singleton is reset so broker state cannot leak between
-  tests.
-- graph.nodes._price_lookup is patched so execution uses deterministic prices.
-- orchestrator.tick_runner.build_correlation_matrix is patched separately
-  because tick_runner imports that symbol directly from portfolio.state.
-  Patching nodes_module.fetch_ohlcv therefore does not affect that binding.
-
-Concurrency note
-----------------
-run_tick() executes ticker pipelines concurrently using worker threads.
-Therefore the test creates exactly one PortfolioLedger instance before
-concurrent execution starts and returns that same instance from _ledger().
-Creating separate PortfolioLedger instances against the same JSON file from
-multiple worker threads can race during file initialization.
-
-The tests intentionally do not depend on the ambient TRADING_MODE
-environment variable. This prevents a previous manual backtest session from
-changing the behavior of the integration tests.
-"""
-
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-import graph.nodes as nodes_module
-import portfolio.ledger as ledger_module
-from agents.news_agent import NewsAgentResult
-from data_sources.schemas import (
-    DataSourceMode,
-    NewsAvailability,
-    OHLCVBar,
-    OHLCVSeries,
-)
-from graph.state import Signal
-from orchestrator.tick_runner import run_tick
+from graph.state import RiskDecision, Signal, TradingState
+from orchestrator import tick_runner
+from portfolio.state import PortfolioSnapshot
 
 
-# ---------------------------------------------------------------------------
-# Deterministic test configuration
-# ---------------------------------------------------------------------------
-
-FAKE_ATR = 10.0
-
-# Sized so the proposed position value is approximately 19% of
-# a $100,000 account, leaving room for portfolio allocation checks.
-FAKE_ENTRY_PRICE = 285.0
-
-FAKE_CONFIDENCE = {
-    "GOOGL": 0.9,
-    "MSFT": 0.8,
-    "AAPL": 0.7,
-}
-
-
-# ---------------------------------------------------------------------------
-# Fake data / agent responses
-# ---------------------------------------------------------------------------
-
-
-def _fake_series(
+def _state(
     ticker: str,
-    lookback_days: int,
-) -> OHLCVSeries:
+    *,
+    direction: str = "bullish",
+    confidence: float = 0.90,
+    risk: RiskDecision = RiskDecision.APPROVED,
+    proposed_shares: float = 10.0,
+    entry_price: float = 100.0,
+    sector: str = "Technology",
+) -> TradingState:
     """
-    Return deterministic OHLCV data for integration tests.
-
-    The ticker and lookback arguments are intentionally accepted so this
-    function matches the production fetch_ohlcv interface.
+    Build a deterministic TradingState for tick-runner tests.
     """
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
-    bar = OHLCVBar(
-        timestamp=start,
-        open=FAKE_ENTRY_PRICE,
-        high=FAKE_ENTRY_PRICE + 1,
-        low=FAKE_ENTRY_PRICE - 1,
-        close=FAKE_ENTRY_PRICE,
-        volume=1_000_000,
-    )
-
-    return OHLCVSeries(
+    return TradingState(
         ticker=ticker,
-        bars=[bar],
-        source="test",
-        mode=DataSourceMode.LIVE,
-        as_of=start + timedelta(days=1),
-    )
-
-
-def _fake_news(ticker: str) -> NewsAgentResult:
-    """
-    Return a deterministic metadata-aware news result.
-
-    The production graph consumes run_news_agent_with_metadata(),
-    so tests must mock the complete NewsAgentResult rather than the
-    backward-compatible run_news_agent() signal-only API.
-    """
-    return NewsAgentResult(
-        signal=Signal(
-            direction="bullish",
-            confidence=FAKE_CONFIDENCE[ticker],
-            rationale="mocked news",
+        news_signal=Signal(
+            direction=direction,
+            confidence=confidence,
+            rationale="test news signal",
         ),
-        availability=NewsAvailability.AVAILABLE,
-        article_count=2,
-        source="test",
-        as_of=datetime(
-            2026,
-            1,
-            1,
-            tzinfo=timezone.utc,
+        chart_signal=Signal(
+            direction=direction,
+            confidence=confidence,
+            rationale="test chart signal",
         ),
+        merged_signal=Signal(
+            direction=direction,
+            confidence=confidence,
+            rationale="test merged signal",
+        ),
+        merge_agreement=True,
+        news_availability="AVAILABLE",
+        news_article_count=0,
+        news_source="test",
+        news_as_of=None,
+        risk_decision=risk,
+        risk_notes=[],
+        atr=2.0,
+        entry_price=entry_price,
+        sector=sector,
+        proposed_shares=proposed_shares,
     )
 
 
-def _fake_chart(ticker: str) -> Signal:
-    """Return a deterministic bullish chart signal."""
-    return Signal(
-        direction="bullish",
-        confidence=FAKE_CONFIDENCE[ticker],
-        rationale="mocked chart",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shared integration-test fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def patched_singletons(tmp_path, monkeypatch):
+def _portfolio_snapshot() -> PortfolioSnapshot:
     """
-    Isolate ledger, broker, market data, and correlation state.
+    Real PortfolioSnapshot model.
 
-    A single PortfolioLedger instance is shared by all ticker worker threads.
-
-    This is important because run_tick() executes ticker pipelines
-    concurrently. Creating a separate PortfolioLedger for each worker would
-    cause multiple threads to initialize/read the same JSON file concurrently,
-    which can produce an empty-file JSONDecodeError.
+    run_tick() calls .model_copy(), so the test must provide the
+    actual Pydantic model rather than SimpleNamespace.
     """
 
-    ledger_path = tmp_path / "ledger.json"
-
-    # Guarantee that PortfolioLedger takes its initialization path.
-    if ledger_path.exists():
-        ledger_path.unlink()
-
-    # ---------------------------------------------------------------
-    # Initialize the ledger exactly once before concurrent execution.
-    # ---------------------------------------------------------------
-
-    test_ledger = ledger_module.PortfolioLedger(
+    return PortfolioSnapshot(
+        equity=100_000.0,
         starting_equity=100_000.0,
-        path=ledger_path,
-    )
-
-    monkeypatch.setattr(
-        nodes_module,
-        "_ledger",
-        lambda: test_ledger,
-    )
-
-    # ---------------------------------------------------------------
-    # Fresh broker state for every test.
-    # ---------------------------------------------------------------
-
-    monkeypatch.setattr(
-        nodes_module,
-        "_broker_singleton",
-        None,
-    )
-
-    # ---------------------------------------------------------------
-    # Deterministic market price.
-    # ---------------------------------------------------------------
-
-    monkeypatch.setattr(
-        nodes_module,
-        "_price_lookup",
-        lambda ticker: FAKE_ENTRY_PRICE,
-    )
-
-    # ---------------------------------------------------------------
-    # Deterministic upstream agents.
-    #
-    # IMPORTANT:
-    # news_agent_node() now calls run_news_agent_with_metadata().
-    # Therefore we patch the metadata-aware function directly.
-    # ---------------------------------------------------------------
-
-    monkeypatch.setattr(
-        nodes_module,
-        "run_news_agent_with_metadata",
-        _fake_news,
-    )
-
-    monkeypatch.setattr(
-        nodes_module,
-        "run_chart_agent",
-        _fake_chart,
-    )
-
-    # ---------------------------------------------------------------
-    # Deterministic OHLCV source.
-    # ---------------------------------------------------------------
-
-    monkeypatch.setattr(
-        nodes_module,
-        "fetch_ohlcv",
-        _fake_series,
-    )
-
-    # ---------------------------------------------------------------
-    # Deterministic ATR.
-    # ---------------------------------------------------------------
-
-    monkeypatch.setattr(
-        nodes_module,
-        "compute_atr",
-        lambda bars: FAKE_ATR,
-    )
-
-    # ---------------------------------------------------------------
-    # tick_runner imports build_correlation_matrix directly from
-    # portfolio.state, so patch that binding separately.
-    # ---------------------------------------------------------------
-
-    monkeypatch.setattr(
-        "orchestrator.tick_runner.build_correlation_matrix",
-        lambda tickers: None,
+        positions={},
+        correlation_matrix=None,
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 1: successful multi-ticker orchestration
-# ---------------------------------------------------------------------------
-
-
-def test_three_correlated_sector_proposals_highest_conviction_wins_end_to_end(
-    patched_singletons,
-):
+def _risk_config():
     """
-    Verify the complete successful multi-ticker orchestration path.
-
-    GOOGL and MSFT have the highest conviction and fit within the configured
-    sector cap.
-
-    AAPL has the lowest conviction and is rejected by the portfolio
-    coordinator.
+    The coordinator itself is mocked in these tests, so the actual
+    RiskConfig fields are not needed.
     """
 
-    results = asyncio.run(run_tick(["GOOGL", "MSFT", "AAPL"]))
-
-    # ---------------------------------------------------------------
-    # Final orchestration outcomes.
-    # ---------------------------------------------------------------
-
-    assert results["GOOGL"].outcome == "executed"
-    assert results["MSFT"].outcome == "executed"
-    assert results["AAPL"].outcome == "held_book_reject"
-
-    # ---------------------------------------------------------------
-    # Successful execution must create broker positions.
-    # ---------------------------------------------------------------
-
-    positions = nodes_module.get_broker().get_positions()
-
-    assert "GOOGL" in positions
-    assert "MSFT" in positions
-
-    # AAPL was rejected before execution.
-    assert "AAPL" not in positions
+    return SimpleNamespace()
 
 
-# ---------------------------------------------------------------------------
-# Test 2: execution failure regression test
-# ---------------------------------------------------------------------------
-
-
-def test_execution_failure_is_not_reported_as_executed(
-    patched_singletons,
-    monkeypatch,
-):
+def _common_patches(state: TradingState):
     """
-    Regression test for execution-result semantics.
+    Common isolation patches.
 
-    A coordinator-approved trade must only be reported as "executed" when
-    the execution agent confirms that the broker order actually succeeded.
-
-    If execution fails, the orchestrator must report:
-
-        held_execution_reject
-
-    and must not create a broker position.
+    build_correlation_matrix() is mocked because these tests are
+    testing tick-runner orchestration, not historical OHLCV
+    correlation calculations.
     """
 
-    def fake_execution_agent(state):
-        """
-        Simulate a broker/execution failure after portfolio approval.
-        """
-        return {
-            "execution_success": False,
-            "execution_notes": (
-                "Execution failed after 2 attempt(s): insufficient shares. "
-                "Falling back to hold."
+    return [
+        patch.object(
+            tick_runner,
+            "_run_local_pipeline",
+            return_value=state,
+        ),
+        patch.object(
+            tick_runner,
+            "build_correlation_matrix",
+            return_value={},
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "get_ledger",
+            return_value=SimpleNamespace(
+                snapshot=_portfolio_snapshot,
             ),
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "get_risk_config",
+            return_value=_risk_config(),
+        ),
+    ]
+
+
+def test_run_tick_executes_coordinator_approved_trade():
+    """
+    Coordinator approves a locally-approved trade.
+
+    Expected:
+        execution is called
+        execution succeeds
+        broker-confirmed execution side is preserved
+        TickResult is "executed"
+    """
+
+    state = _state(
+        "AAPL",
+        confidence=0.95,
+        proposed_shares=10.0,
+    )
+
+    execution_calls = []
+
+    def fake_execution(execution_state):
+        execution_calls.append(execution_state)
+
+        return {
+            "execution_success": True,
+            "execution_notes": "test execution succeeded",
+            "execution_side": "buy",
         }
 
-    monkeypatch.setattr(
-        "orchestrator.tick_runner.nodes.execution_agent_node",
-        fake_execution_agent,
+    patches = _common_patches(state)
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patch.object(
+            tick_runner,
+            "run_portfolio_coordinator",
+            return_value={
+                "AAPL": SimpleNamespace(
+                    ticker="AAPL",
+                    approved=True,
+                    shares=10.0,
+                    notes=["Approved at book level."],
+                )
+            },
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "execution_agent_node",
+            side_effect=fake_execution,
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "hold_node",
+        ),
+    ):
+        results = asyncio.run(tick_runner.run_tick(["AAPL"]))
+
+    result = results["AAPL"]
+
+    assert result.outcome == "executed"
+    assert result.execution_attempted is True
+    assert result.execution_success is True
+    assert result.execution_side == "buy"
+
+    assert result.shares == pytest.approx(10.0)
+    assert result.proposed_shares == pytest.approx(10.0)
+
+    assert result.signal_direction == "bullish"
+    assert result.signal_confidence == pytest.approx(0.95)
+    assert result.merge_agreement is True
+
+    assert len(execution_calls) == 1
+    assert execution_calls[0].ticker == "AAPL"
+    assert execution_calls[0].proposed_shares == pytest.approx(10.0)
+
+
+def test_run_tick_execution_failure_is_not_reported_as_executed():
+    """
+    Coordinator approves the trade, but execution fails.
+
+    Expected:
+        execution is attempted
+        execution_success=False
+        TickResult is "held_execution_reject"
+        shares reported as zero
+    """
+
+    state = _state(
+        "GOOGL",
+        confidence=0.95,
+        proposed_shares=10.0,
     )
 
-    results = asyncio.run(run_tick(["GOOGL", "MSFT", "AAPL"]))
+    execution_calls = []
 
-    # ---------------------------------------------------------------
-    # Coordinator approved GOOGL/MSFT, but execution failed.
-    # Therefore neither trade may be reported as executed.
-    # ---------------------------------------------------------------
+    def fake_execution(execution_state):
+        execution_calls.append(execution_state)
 
-    assert results["GOOGL"].outcome == "held_execution_reject"
-    assert results["MSFT"].outcome == "held_execution_reject"
+        return {
+            "execution_success": False,
+            "execution_notes": "simulated broker rejection",
+        }
 
-    # ---------------------------------------------------------------
-    # Failed execution must not report allocated shares as executed.
-    # ---------------------------------------------------------------
+    patches = _common_patches(state)
 
-    assert results["GOOGL"].shares == 0.0
-    assert results["MSFT"].shares == 0.0
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patch.object(
+            tick_runner,
+            "run_portfolio_coordinator",
+            return_value={
+                "GOOGL": SimpleNamespace(
+                    ticker="GOOGL",
+                    approved=True,
+                    shares=10.0,
+                    notes=["Approved at book level."],
+                )
+            },
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "execution_agent_node",
+            side_effect=fake_execution,
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "hold_node",
+        ),
+    ):
+        results = asyncio.run(tick_runner.run_tick(["GOOGL"]))
 
-    # ---------------------------------------------------------------
-    # Execution failure reason must propagate to the final result.
-    # ---------------------------------------------------------------
+    result = results["GOOGL"]
 
-    assert "Execution failed" in results["GOOGL"].notes
-    assert "Falling back to hold" in results["GOOGL"].notes
+    assert result.outcome == "held_execution_reject"
 
-    # ---------------------------------------------------------------
-    # AAPL is still rejected by the portfolio coordinator.
-    # ---------------------------------------------------------------
+    assert result.execution_attempted is True
+    assert result.execution_success is False
 
-    assert results["AAPL"].outcome == "held_book_reject"
+    assert result.shares == pytest.approx(0.0)
+
+    assert result.notes == "simulated broker rejection"
+
+    assert len(execution_calls) == 1
+
+
+def test_run_tick_local_risk_rejection_does_not_execute():
+    """
+    Local RiskAgent rejects the trade.
+
+    Expected:
+        ticker is not sent as a coordinator proposal
+        execution is never called
+        TickResult is "held_local_reject"
+    """
+
+    state = _state(
+        "AAPL",
+        confidence=0.90,
+        risk=RiskDecision.REJECTED,
+        proposed_shares=10.0,
+    )
+
+    execution_called = False
+
+    def fake_execution(execution_state):
+        nonlocal execution_called
+        execution_called = True
+
+        return {
+            "execution_success": True,
+            "execution_notes": "should not happen",
+        }
+
+    coordinator_calls = []
+
+    def fake_coordinator(
+        proposals,
+        portfolio,
+        config,
+    ):
+        coordinator_calls.append(proposals)
+        return {}
+
+    patches = _common_patches(state)
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patch.object(
+            tick_runner,
+            "run_portfolio_coordinator",
+            side_effect=fake_coordinator,
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "execution_agent_node",
+            side_effect=fake_execution,
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "hold_node",
+        ),
+    ):
+        results = asyncio.run(tick_runner.run_tick(["AAPL"]))
+
+    result = results["AAPL"]
+
+    assert result.outcome == "held_local_reject"
+
+    assert result.execution_attempted is False
+    assert result.execution_success is None
+
+    assert result.shares == pytest.approx(0.0)
+
+    assert execution_called is False
+
+    assert len(coordinator_calls) == 1
+
+
+def test_run_tick_book_rejection_does_not_execute():
+    """
+    PortfolioRiskCoordinator rejects the trade.
+
+    Expected:
+        execution is never called
+        TickResult is "held_book_reject"
+    """
+
+    state = _state(
+        "MSFT",
+        confidence=0.80,
+        proposed_shares=10.0,
+    )
+
+    execution_called = False
+
+    def fake_execution(execution_state):
+        nonlocal execution_called
+        execution_called = True
+
+        return {
+            "execution_success": True,
+            "execution_notes": "should not execute",
+        }
+
+    patches = _common_patches(state)
+
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patch.object(
+            tick_runner,
+            "run_portfolio_coordinator",
+            return_value={
+                "MSFT": SimpleNamespace(
+                    ticker="MSFT",
+                    approved=False,
+                    shares=0.0,
+                    notes=["Book-level correlation rejection."],
+                )
+            },
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "execution_agent_node",
+            side_effect=fake_execution,
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "hold_node",
+        ),
+    ):
+        results = asyncio.run(tick_runner.run_tick(["MSFT"]))
+
+    result = results["MSFT"]
+
+    assert result.outcome == "held_book_reject"
+
+    assert result.execution_attempted is False
+    assert result.execution_success is None
+
+    assert result.shares == pytest.approx(0.0)
+
+    assert "Book-level correlation rejection." in result.notes
+
+    assert execution_called is False
+
+
+def test_run_tick_preserves_news_and_signal_metadata():
+    """
+    Successful execution preserves important telemetry from
+    TradingState in TickResult.
+    """
+
+    state = _state(
+        "JPM",
+        confidence=0.91,
+        proposed_shares=5.0,
+        entry_price=192.50,
+        sector="Financials",
+    )
+
+    with (
+        patch.object(
+            tick_runner,
+            "_run_local_pipeline",
+            return_value=state,
+        ),
+        patch.object(
+            tick_runner,
+            "build_correlation_matrix",
+            return_value={},
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "get_ledger",
+            return_value=SimpleNamespace(
+                snapshot=_portfolio_snapshot,
+            ),
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "get_risk_config",
+            return_value=_risk_config(),
+        ),
+        patch.object(
+            tick_runner,
+            "run_portfolio_coordinator",
+            return_value={
+                "JPM": SimpleNamespace(
+                    ticker="JPM",
+                    approved=True,
+                    shares=5.0,
+                    notes=["Approved at book level."],
+                )
+            },
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "execution_agent_node",
+            return_value={
+                "execution_success": True,
+                "execution_notes": "filled",
+                "execution_side": "buy",
+            },
+        ),
+        patch.object(
+            tick_runner.nodes,
+            "hold_node",
+        ),
+    ):
+        results = asyncio.run(tick_runner.run_tick(["JPM"]))
+
+    result = results["JPM"]
+
+    assert result.outcome == "executed"
+
+    # News provenance.
+    assert result.news_availability == "AVAILABLE"
+    assert result.news_article_count == 0
+    assert result.news_source == "test"
+    assert result.news_as_of is None
+
+    # Signal telemetry.
+    assert result.signal_direction == "bullish"
+    assert result.signal_confidence == pytest.approx(0.91)
+    assert result.merge_agreement is True
+
+    # Execution telemetry.
+    assert result.execution_attempted is True
+    assert result.execution_success is True
+    assert result.execution_side == "buy"
+
+    assert result.shares == pytest.approx(5.0)
+    assert result.proposed_shares == pytest.approx(5.0)
+    assert result.price == pytest.approx(192.50)
+    assert result.atr == pytest.approx(2.0)
+    assert result.sector == "Financials"

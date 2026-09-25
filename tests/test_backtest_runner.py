@@ -24,6 +24,7 @@ import pytest
 
 import data_sources.historical as historical_module
 import graph.nodes as nodes_module
+from agents.news_agent import NewsAgentResult, NewsAvailability
 from data_sources import get_simulated_date, set_simulated_date
 from data_sources.schemas import DataSourceMode, OHLCVBar, OHLCVSeries
 from graph.state import Signal
@@ -45,6 +46,7 @@ def _fake_historical_ohlcv(
     deterministic while position sizing and ticker-cap behavior are tested.
     """
 
+    del ticker
     del lookback_days
 
     base_date = simulated_date.replace(
@@ -71,7 +73,7 @@ def _fake_historical_ohlcv(
         )
 
     return OHLCVSeries(
-        ticker=ticker,
+        ticker="AAPL",
         bars=bars,
         source="test_fixture",
         mode=DataSourceMode.BACKTEST,
@@ -90,6 +92,26 @@ def _fake_bullish_signal(ticker: str) -> Signal:
         direction="bullish",
         confidence=0.8,
         rationale="test fixture",
+    )
+
+
+def _fake_bullish_news_result(ticker: str) -> NewsAgentResult:
+    """
+    Return deterministic metadata-aware bullish news output.
+
+    This mirrors the production NewsAgent API used by graph.nodes.
+    """
+
+    current = get_simulated_date()
+
+    assert current is not None
+
+    return NewsAgentResult(
+        signal=_fake_bullish_signal(ticker),
+        availability=NewsAvailability.AVAILABLE,
+        article_count=1,
+        source="test_fixture",
+        as_of=current,
     )
 
 
@@ -172,8 +194,8 @@ def test_backtest_runner_executes_then_clamps_on_ticker_cap(
 
     monkeypatch.setattr(
         nodes_module,
-        "run_news_agent",
-        _fake_bullish_signal,
+        "run_news_agent_with_metadata",
+        _fake_bullish_news_result,
     )
 
     monkeypatch.setattr(
@@ -290,9 +312,9 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
     Session 3:
         no AAPL position remains
 
-    The historical fixture exposes only bars whose timestamps are less than
-    or equal to simulated_date. This prevents the broker, agents, or data
-    layer from seeing future prices during historical replay.
+    The historical fixture exposes only bars whose timestamps are less
+    than or equal to simulated_date. This prevents the broker, agents, or
+    data layer from seeing future prices during historical replay.
     """
 
     monkeypatch.setenv(
@@ -324,7 +346,9 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
         bars: list[OHLCVBar] = []
 
         for date_key, price in prices.items():
-            timestamp = datetime.fromisoformat(date_key).replace(tzinfo=UTC)
+            timestamp = datetime.fromisoformat(date_key).replace(
+                tzinfo=UTC,
+            )
 
             if timestamp > simulated_date:
                 continue
@@ -360,8 +384,8 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
 
         Session 1 is bullish so the strategy opens a long position.
 
-        Sessions 2 and 3 are bearish so the long-only execution path is
-        exercised and the existing position must be closed on Session 2.
+        Sessions 2 and 3 are bearish so the long-only execution path
+        is exercised and the existing position must be closed on Session 2.
         """
 
         del ticker
@@ -383,10 +407,28 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
             rationale="test exit signal",
         )
 
+    def fake_news_result(ticker: str) -> NewsAgentResult:
+        """
+        Wrap the deterministic lifecycle signal in the production
+        metadata-aware NewsAgentResult contract.
+        """
+
+        current = get_simulated_date()
+
+        assert current is not None
+
+        return NewsAgentResult(
+            signal=fake_signal(ticker),
+            availability=NewsAvailability.AVAILABLE,
+            article_count=1,
+            source="test_fixture",
+            as_of=current,
+        )
+
     monkeypatch.setattr(
         nodes_module,
-        "run_news_agent",
-        fake_signal,
+        "run_news_agent_with_metadata",
+        fake_news_result,
     )
 
     monkeypatch.setattr(
@@ -450,7 +492,6 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
 
     bought_shares = day1["remaining_shares"]
 
-    # A successful BUY must create exactly one execution event.
     assert len(result.trades) >= 1
 
     first_trade = result.trades[0]
@@ -471,11 +512,8 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
     assert day2["execution_success"] is True
     assert day2["execution_side"] == "sell"
 
-    # The broker must fill at Session 2's historical price rather
-    # than a future Session 3 price.
     assert day2["price"] == pytest.approx(110.0)
 
-    # The complete long position must be sold.
     assert day2["remaining_shares"] == pytest.approx(
         0.0,
         abs=1e-9,
@@ -494,8 +532,6 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
         rel=1e-6,
     )
 
-    # The closed-trade collection must contain exactly one completed
-    # round trip.
     assert len(result.closed_trades) == 1
 
     closed_trade = result.closed_trades[0]
@@ -533,16 +569,10 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
 
     assert day3["position_closed"] is True
 
-    # No additional execution should be required because the long
-    # position was already closed on Session 2.
     assert len(result.trades) == 2
 
     # ---------------------------------------------------------------
     # Final backtest state
-    #
-    # run_backtest() intentionally restores the temporary broker and
-    # ledger singletons before returning. Therefore the authoritative
-    # final state must be read from BacktestResult.
     # ---------------------------------------------------------------
 
     expected_final_equity = 100_000.0 + expected_pnl
@@ -564,8 +594,6 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
         rel=1e-6,
     )
 
-    # The final equity curve point should agree with the captured
-    # final ledger equity.
     assert result.equity_curve[-1][1] == pytest.approx(
         result.final_equity,
         rel=1e-6,

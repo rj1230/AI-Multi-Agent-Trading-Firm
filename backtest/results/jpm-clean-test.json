@@ -1,0 +1,115 @@
+{
+  "sharpe_ratio": 0.0,
+  "win_rate": null,
+  "closed_trades": 0,
+  "max_drawdown": 0.0,
+  "total_return": 0.0,
+  "buy_hold_return": 0.0,
+  "excess_return_vs_buy_and_hold": 0.0,
+  "realized_pnl": null,
+  "gross_profit": null,
+  "gross_loss": null,
+  "profit_factor": null,
+  "average_winning_trade": null,
+  "average_losing_trade": null,
+  "equity_curve": [
+    [
+      "2024-06-27",
+      100000.0
+    ]
+  ],
+  "buy_hold_curve": [
+    [
+      "2024-06-27",
+      100000.0
+    ]
+  ],
+  "trades": [
+    {
+      "date": "2024-06-27",
+      "ticker": "JPM",
+      "notes": "Order SIM-1 filled for 105.2156 shares of JPM.",
+      "shares": 105.2156,
+      "price": 190.08580017089844,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 3.377170095676555,
+      "sector": "Financials",
+      "execution_attempted": true,
+      "execution_success": true,
+      "execution_side": "buy",
+      "average_cost": 190.08580017089844,
+      "realized_pnl": 0.0,
+      "remaining_shares": 105.2156,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-27T04:00:00+00:00"
+    }
+  ],
+  "closed_trade_events": [],
+  "tick_log": [
+    {
+      "date": "2024-06-27",
+      "ticker": "JPM",
+      "outcome": "executed",
+      "notes": "Order SIM-1 filled for 105.2156 shares of JPM.",
+      "shares": 105.2156,
+      "price": 190.08580017089844,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 3.377170095676555,
+      "entry_price": 190.08580017089844,
+      "sector": "Financials",
+      "proposed_shares": 105.2156,
+      "risk_decision": "approved",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 197.40 sh ($37,524) resized to 105.22 sh ($20,000) -- ticker room $20,000, sector room $40,000.",
+        "Concurrent positions: 0 open, max 3 -> ok.",
+        "Per-ticker cap (JPM): would be 20.0% of equity, cap 20% -> ok.",
+        "Per-sector cap (Financials): would be 20.0% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7."
+      ],
+      "execution_attempted": true,
+      "execution_success": true,
+      "execution_side": "buy",
+      "average_cost": 190.08580017089844,
+      "realized_pnl": 0.0,
+      "remaining_shares": 105.2156,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-27T04:00:00+00:00"
+    }
+  ],
+  "diagnostics": {
+    "tick_count": 1,
+    "outcome_counts": {
+      "executed": 1
+    },
+    "risk_approvals": 1,
+    "local_rejections": 0,
+    "coordinator_approvals": 1,
+    "book_rejections": 0,
+    "execution_attempts": 1,
+    "execution_successes": 1,
+    "execution_failures": 0,
+    "execution_events": 1,
+    "closed_trades": 0
+  },
+  "news_availability": {
+    "JPM": {
+      "sessions": 1,
+      "available_sessions": 1,
+      "unavailable_sessions": 0,
+      "error_sessions": 0,
+      "articles_seen": 0,
+      "status": "available"
+    }
+  }
+}

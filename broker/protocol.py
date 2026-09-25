@@ -4,9 +4,10 @@ Alpaca or SimBroker directly -- only this file. Swapping AlpacaBroker for
 SimBroker (or a future second broker) is a config-line change, zero
 changes to agents/execution_agent.py. See architecture doc, Phase 6.
 """
+
 from __future__ import annotations
 
-from typing import Literal, Optional, Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -20,7 +21,7 @@ class OrderResult(BaseModel):
     side: OrderSide
     qty: float
     status: OrderStatus
-    filled_avg_price: Optional[float] = None
+    filled_avg_price: float | None = None
     raw: dict = {}
 
 
@@ -39,8 +40,11 @@ class AccountInfo(BaseModel):
 
 class Broker(Protocol):
     def submit_order(
-        self, ticker: str, side: OrderSide, qty: float,
-        client_order_id: Optional[str] = None,
+        self,
+        ticker: str,
+        side: OrderSide,
+        qty: float,
+        client_order_id: str | None = None,
     ) -> OrderResult: ...
 
     def get_positions(self) -> dict[str, BrokerPosition]: ...

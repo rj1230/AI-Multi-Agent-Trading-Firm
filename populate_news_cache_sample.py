@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 CACHE_DIR = Path("data_cache") / "news_cache"
@@ -54,7 +54,7 @@ def build_articles(ticker: str, start: datetime, end: datetime) -> list[dict]:
                 "description": f"Placeholder {flavor} headline generated for backtest coverage.",
                 "source": "sample_cache",
                 "published_at": current.replace(
-                    hour=13, minute=0, second=0, tzinfo=timezone.utc
+                    hour=13, minute=0, second=0, tzinfo=UTC
                 ).isoformat(),
                 "url": f"https://example.com/{ticker.lower()}-news-{current.date()}",
             }
@@ -73,8 +73,8 @@ def main() -> None:
         sys.exit(1)
 
     ticker = sys.argv[1].upper()
-    start = datetime.strptime(sys.argv[2], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end = datetime.strptime(sys.argv[3], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    start = datetime.strptime(sys.argv[2], "%Y-%m-%d").replace(tzinfo=UTC)
+    end = datetime.strptime(sys.argv[3], "%Y-%m-%d").replace(tzinfo=UTC)
 
     articles = build_articles(ticker, start, end)
 

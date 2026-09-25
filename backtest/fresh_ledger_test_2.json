@@ -1,0 +1,13 @@
+{
+  "cash": 80000.0063484436,
+  "positions": {
+    "AAPL": {
+      "ticker": "AAPL",
+      "shares": 103.8186,
+      "sector": "Tech",
+      "market_value": 20247.833311743165
+    }
+  },
+  "session_date": "2024-06-06",
+  "session_starting_equity": 100000.0
+}

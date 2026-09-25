@@ -13,9 +13,9 @@ import json
 import logging
 import os
 
-import config.settings  # noqa: F401 -- triggers load_dotenv() at import time, ensures .env is loaded before this file's os.getenv("GROQ_API_KEY") calls regardless of import order elsewhere
-
 from nemoguardrails.actions import action
+
+import config.settings  # noqa: F401 -- triggers load_dotenv() at import time, ensures .env is loaded before this file's os.getenv("GROQ_API_KEY") calls regardless of import order elsewhere
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,6 @@ async def check_signal_coherence_action(direction: str, rationale: str) -> dict:
             "coherent": bool(data.get("coherent", True)),
             "reason": str(data.get("reason", "")),
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Guardrails coherence action failed open: %s", e)
         return {"coherent": True, "reason": ""}

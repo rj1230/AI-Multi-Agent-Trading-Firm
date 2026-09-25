@@ -1,0 +1,477 @@
+{
+  "sharpe_ratio": 8.419544558091829,
+  "win_rate": null,
+  "closed_trades": 0,
+  "max_drawdown": -0.0028893073713270106,
+  "total_return": 0.009468777869567901,
+  "buy_hold_return": 0.04734390943003386,
+  "excess_return_vs_buy_and_hold": -0.03787513156046596,
+  "realized_pnl": null,
+  "gross_profit": null,
+  "gross_loss": null,
+  "profit_factor": null,
+  "average_winning_trade": null,
+  "average_losing_trade": null,
+  "equity_curve": [
+    [
+      "2024-06-27",
+      100000.0
+    ],
+    [
+      "2024-06-28",
+      100310.28455476073
+    ],
+    [
+      "2024-07-01",
+      100630.61609476317
+    ],
+    [
+      "2024-07-02",
+      100970.02374193115
+    ],
+    [
+      "2024-07-03",
+      100955.96631099853
+    ],
+    [
+      "2024-07-05",
+      100678.29030805052
+    ],
+    [
+      "2024-07-08",
+      100716.65925983887
+    ],
+    [
+      "2024-07-09",
+      100965.05322957764
+    ],
+    [
+      "2024-07-10",
+      100982.22044165648
+    ],
+    [
+      "2024-07-11",
+      100946.87778695679
+    ]
+  ],
+  "buy_hold_curve": [
+    [
+      "2024-06-27",
+      100000.0
+    ],
+    [
+      "2024-06-28",
+      101551.42343188175
+    ],
+    [
+      "2024-07-01",
+      103153.08181128051
+    ],
+    [
+      "2024-07-02",
+      104850.12076696515
+    ],
+    [
+      "2024-07-03",
+      104779.83358248786
+    ],
+    [
+      "2024-07-05",
+      103391.45297882883
+    ],
+    [
+      "2024-07-08",
+      103583.29781914664
+    ],
+    [
+      "2024-07-09",
+      104825.26819465568
+    ],
+    [
+      "2024-07-10",
+      104911.10429145966
+    ],
+    [
+      "2024-07-11",
+      104734.3909430034
+    ]
+  ],
+  "trades": [
+    {
+      "date": "2024-06-27",
+      "ticker": "JPM",
+      "notes": "Order SIM-1 filled for 105.2156 shares of JPM.",
+      "shares": 105.2156,
+      "price": 190.08580017089844,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 3.377170095676555,
+      "sector": "Financials",
+      "execution_attempted": true,
+      "execution_success": true,
+      "execution_side": "buy",
+      "average_cost": 190.08580017089844,
+      "realized_pnl": 0.0,
+      "remaining_shares": 105.2156,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-27T04:00:00+00:00"
+    }
+  ],
+  "closed_trade_events": [],
+  "tick_log": [
+    {
+      "date": "2024-06-27",
+      "ticker": "JPM",
+      "outcome": "executed",
+      "notes": "Order SIM-1 filled for 105.2156 shares of JPM.",
+      "shares": 105.2156,
+      "price": 190.08580017089844,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 3.377170095676555,
+      "entry_price": 190.08580017089844,
+      "sector": "Financials",
+      "proposed_shares": 105.2156,
+      "risk_decision": "approved",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.00% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 197.40 sh ($37,524) resized to 105.22 sh ($20,000) -- ticker room $20,000, sector room $40,000.",
+        "Concurrent positions: 0 open, max 3 -> ok.",
+        "Per-ticker cap (JPM): would be 20.0% of equity, cap 20% -> ok.",
+        "Per-sector cap (Financials): would be 20.0% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7."
+      ],
+      "execution_attempted": true,
+      "execution_success": true,
+      "execution_side": "buy",
+      "average_cost": 190.08580017089844,
+      "realized_pnl": 0.0,
+      "remaining_shares": 105.2156,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-27T04:00:00+00:00"
+    },
+    {
+      "date": "2024-06-28",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.31% > threshold -3.00% -> ok.; Sizing: raw risk-based size 200.36 sh ($38,677) resized to 0.00 sh ($0) -- ticker room $0, sector room $19,814.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (JPM): would be 20.2% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Financials): would be 20.2% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for JPM in Financials -- trade rejected, not resized.",
+      "shares": 0.0,
+      "price": 193.0348358154297,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 3.3376303345122875,
+      "entry_price": 193.0348358154297,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.31% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 200.36 sh ($38,677) resized to 0.00 sh ($0) -- ticker room $0, sector room $19,814.",
+        "Concurrent positions: 1 open, max 3 -> ok.",
+        "Per-ticker cap (JPM): would be 20.2% of equity, cap 20% -> BREACH (no room left).",
+        "Per-sector cap (Financials): would be 20.2% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7.",
+        "No cap room remains for JPM in Financials -- trade rejected, not resized."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-06-28T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-01",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.63% > threshold -3.00% -> ok.; Sizing: raw risk-based size 191.50 sh ($37,549) resized to 0.00 sh ($0) -- ticker room $0, sector room $19,622.; Concurrent positions: 1 open, max 3 -> ok.; Per-ticker cap (JPM): would be 20.5% of equity, cap 20% -> BREACH (no room left).; Per-sector cap (Financials): would be 20.5% of equity, cap 40% -> ok.; Correlation: ok, no existing holding above 0.7.; No cap room remains for JPM in Financials -- trade rejected, not resized.",
+      "shares": 0.0,
+      "price": 196.07936096191406,
+      "signal_direction": "bullish",
+      "signal_confidence": 0.375,
+      "merge_agreement": false,
+      "atr": 3.5032870699391503,
+      "entry_price": 196.07936096191406,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.63% > threshold -3.00% -> ok.",
+        "Sizing: raw risk-based size 191.50 sh ($37,549) resized to 0.00 sh ($0) -- ticker room $0, sector room $19,622.",
+        "Concurrent positions: 1 open, max 3 -> ok.",
+        "Per-ticker cap (JPM): would be 20.5% of equity, cap 20% -> BREACH (no room left).",
+        "Per-sector cap (Financials): would be 20.5% of equity, cap 40% -> ok.",
+        "Correlation: ok, no existing holding above 0.7.",
+        "No cap room remains for JPM in Financials -- trade rejected, not resized."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-01T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-02",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.97% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 199.30519104003906,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.3724006850488104,
+      "entry_price": 199.30519104003906,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.97% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-02T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-03",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.96% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 199.1715850830078,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.189703739302865,
+      "entry_price": 199.1715850830078,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.96% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-03T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-05",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.68% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 196.532470703125,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.1444878712299618,
+      "entry_price": 196.532470703125,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.68% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-05T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-08",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.72% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 196.8971405029297,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.1108269412157137,
+      "entry_price": 196.8971405029297,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.72% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-08T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-09",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.97% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 199.25794982910156,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.2250416193233837,
+      "entry_price": 199.25794982910156,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.97% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-09T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-10",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.98% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 199.42111206054688,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.12777848206952,
+      "entry_price": 199.42111206054688,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.98% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-10T04:00:00+00:00"
+    },
+    {
+      "date": "2024-07-11",
+      "ticker": "JPM",
+      "outcome": "held_local_reject",
+      "notes": "Circuit breaker: today's P&L 0.95% > threshold -3.00% -> ok.; Merged signal is neutral -- no trade to evaluate.",
+      "shares": 0.0,
+      "price": 199.085205078125,
+      "signal_direction": "neutral",
+      "signal_confidence": 0.0,
+      "merge_agreement": false,
+      "atr": 3.086540455540984,
+      "entry_price": 199.085205078125,
+      "sector": "Financials",
+      "proposed_shares": 0.0,
+      "risk_decision": "rejected",
+      "risk_notes": [
+        "Circuit breaker: today's P&L 0.95% > threshold -3.00% -> ok.",
+        "Merged signal is neutral -- no trade to evaluate."
+      ],
+      "execution_attempted": false,
+      "execution_success": null,
+      "execution_side": null,
+      "average_cost": null,
+      "realized_pnl": null,
+      "remaining_shares": null,
+      "position_closed": false,
+      "news_availability": "available",
+      "news_article_count": 0,
+      "news_source": "historical_replay",
+      "news_as_of": "2024-07-11T04:00:00+00:00"
+    }
+  ],
+  "diagnostics": {
+    "tick_count": 10,
+    "outcome_counts": {
+      "executed": 1,
+      "held_local_reject": 9
+    },
+    "risk_approvals": 1,
+    "local_rejections": 9,
+    "coordinator_approvals": 1,
+    "book_rejections": 0,
+    "execution_attempts": 1,
+    "execution_successes": 1,
+    "execution_failures": 0,
+    "execution_events": 1,
+    "closed_trades": 0
+  },
+  "news_availability": {
+    "JPM": {
+      "sessions": 10,
+      "available_sessions": 10,
+      "unavailable_sessions": 0,
+      "error_sessions": 0,
+      "articles_seen": 0,
+      "status": "available"
+    }
+  }
+}

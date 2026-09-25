@@ -1,13 +1,20 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from agents.chart_agent import compute_atr
 from data_sources.schemas import OHLCVBar
 
 
 def _bars(closes: list[float]) -> list[OHLCVBar]:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     return [
-        OHLCVBar(timestamp=start + timedelta(days=i), open=c, high=c + 1, low=c - 1, close=c, volume=1000)
+        OHLCVBar(
+            timestamp=start + timedelta(days=i),
+            open=c,
+            high=c + 1,
+            low=c - 1,
+            close=c,
+            volume=1000,
+        )
         for i, c in enumerate(closes)
     ]
 

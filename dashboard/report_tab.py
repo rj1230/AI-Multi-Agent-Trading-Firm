@@ -11,7 +11,7 @@ from dashboard.data import load_backtest_results
 
 
 def render():
-    equity_df, trades_df, tick_log_df, is_sample = load_backtest_results()
+    equity_df, trades_df, _tick_log_df, is_sample = load_backtest_results()
 
     if is_sample:
         st.info(

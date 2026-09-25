@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,6 @@ from portfolio.state import (
     Position,
     build_correlation_matrix,
 )
-
 
 DEFAULT_LEDGER_PATH = Path("portfolio") / "portfolio_ledger.json"
 
@@ -91,7 +90,7 @@ class PortfolioLedger:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
 
                 if not isinstance(data, dict):
-                    raise ValueError("Ledger JSON root must be an object.")
+                    raise ValueError("Ledger JSON root must be an object.")  # noqa: TRY004
 
                 data.setdefault("cash", self.starting_equity)
                 data.setdefault("positions", {})
@@ -147,15 +146,15 @@ class PortfolioLedger:
             return
 
         if simulated_date.tzinfo is None:
-            simulated_date = simulated_date.replace(tzinfo=timezone.utc)
+            simulated_date = simulated_date.replace(tzinfo=UTC)
 
-        self.simulated_date = simulated_date.astimezone(timezone.utc)
+        self.simulated_date = simulated_date.astimezone(UTC)
 
     def _current_timestamp(self) -> datetime:
         if self.simulated_date is not None:
             return self.simulated_date
 
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def _mark_to_market(self) -> None:
         if not self._data.get("positions"):
@@ -196,7 +195,7 @@ class PortfolioLedger:
                 # It must never overwrite historical average cost.
                 position["market_value"] = shares * price
 
-            except Exception:
+            except Exception:  # noqa: S112,BLE001
                 continue
 
         self._save()

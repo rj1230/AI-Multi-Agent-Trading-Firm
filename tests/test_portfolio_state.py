@@ -1,17 +1,26 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import portfolio.state as state_module
-from data_sources.schemas import OHLCVBar, OHLCVSeries, DataSourceMode
+from data_sources.schemas import DataSourceMode, OHLCVBar, OHLCVSeries
 
 
 def _make_series(ticker: str, closes: list[float]) -> OHLCVSeries:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     bars = [
-        OHLCVBar(timestamp=start + timedelta(days=i), open=c, high=c + 1, low=c - 1, close=c, volume=1000)
+        OHLCVBar(
+            timestamp=start + timedelta(days=i),
+            open=c,
+            high=c + 1,
+            low=c - 1,
+            close=c,
+            volume=1000,
+        )
         for i, c in enumerate(closes)
     ]
     as_of = bars[-1].timestamp if bars else start
-    return OHLCVSeries(ticker=ticker, bars=bars, source="test", mode=DataSourceMode.LIVE, as_of=as_of)
+    return OHLCVSeries(
+        ticker=ticker, bars=bars, source="test", mode=DataSourceMode.LIVE, as_of=as_of
+    )
 
 
 def test_build_correlation_matrix_calls_fetch_ohlcv_per_ticker(monkeypatch):

@@ -18,7 +18,7 @@ multi-ticker orchestration.
 from __future__ import annotations
 
 import operator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -30,7 +30,7 @@ class AgentLogEntry(BaseModel):
 
     node: str
     message: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Signal(BaseModel):
@@ -73,7 +73,7 @@ class TradingState(BaseModel):
 
     ticker: str
 
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     run_id: str | None = None
     tick_id: int | None = None

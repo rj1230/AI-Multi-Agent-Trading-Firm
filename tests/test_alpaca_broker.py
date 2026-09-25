@@ -1,10 +1,10 @@
 from unittest.mock import MagicMock
 
 import pytest
+from alpaca.trading.enums import OrderStatus
 
 import broker.alpaca_broker as alpaca_broker_module
 from broker.alpaca_broker import AlpacaBroker
-from alpaca.trading.enums import OrderStatus
 
 
 @pytest.fixture
@@ -23,7 +23,9 @@ def broker(monkeypatch):
 
 def test_submit_order_maps_filled_status(broker):
     fake_order = MagicMock(
-        id="abc-123", status=OrderStatus.FILLED, filled_avg_price="150.25",
+        id="abc-123",
+        status=OrderStatus.FILLED,
+        filled_avg_price="150.25",
         client_order_id="AAPL-bullish-10",
     )
     broker._fake_client.submit_order.return_value = fake_order
@@ -36,7 +38,12 @@ def test_submit_order_maps_filled_status(broker):
 
 
 def test_submit_order_maps_rejected_status(broker):
-    fake_order = MagicMock(id="abc-124", status=OrderStatus.REJECTED, filled_avg_price=None, client_order_id="x")
+    fake_order = MagicMock(
+        id="abc-124",
+        status=OrderStatus.REJECTED,
+        filled_avg_price=None,
+        client_order_id="x",
+    )
     broker._fake_client.submit_order.return_value = fake_order
 
     result = broker.submit_order("AAPL", "buy", 10)
@@ -44,7 +51,12 @@ def test_submit_order_maps_rejected_status(broker):
 
 
 def test_submit_order_maps_pending_style_status_to_pending(broker):
-    fake_order = MagicMock(id="abc-125", status=OrderStatus.ACCEPTED, filled_avg_price=None, client_order_id="x")
+    fake_order = MagicMock(
+        id="abc-125",
+        status=OrderStatus.ACCEPTED,
+        filled_avg_price=None,
+        client_order_id="x",
+    )
     broker._fake_client.submit_order.return_value = fake_order
 
     result = broker.submit_order("AAPL", "buy", 10)
@@ -59,7 +71,9 @@ def test_submit_order_network_exception_becomes_rejected_result(broker):
 
 
 def test_get_positions_converts_alpaca_positions(broker):
-    fake_position = MagicMock(symbol="AAPL", qty="10", market_value="1500.0", avg_entry_price="150.0")
+    fake_position = MagicMock(
+        symbol="AAPL", qty="10", market_value="1500.0", avg_entry_price="150.0"
+    )
     broker._fake_client.get_all_positions.return_value = [fake_position]
 
     positions = broker.get_positions()

@@ -1,4 +1,5 @@
 import asyncio
+
 from orchestrator.tick_runner import run_tick
 
 result = asyncio.run(run_tick(["AAPL"]))

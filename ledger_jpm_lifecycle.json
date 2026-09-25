@@ -1,0 +1,15 @@
+{
+  "cash": 80000.00848353881,
+  "positions": {
+    "JPM": {
+      "ticker": "JPM",
+      "shares": 105.2156,
+      "sector": "Financials",
+      "average_cost": 190.08580017089844,
+      "market_value": 20955.957827459715
+    }
+  },
+  "session_date": "2024-06-27",
+  "session_starting_equity": 100000.0,
+  "realized_pnl": 0.0
+}

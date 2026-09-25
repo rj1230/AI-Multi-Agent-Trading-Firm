@@ -4,7 +4,7 @@ mocking needed); run_chart_agent's data-fetch integration is tested with
 fetch_ohlcv mocked.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from agents.chart_agent import (
@@ -17,7 +17,7 @@ from data_sources.schemas import DataSourceMode, OHLCVBar, OHLCVSeries
 
 
 def _make_bars(closes: list[float], volumes: list[int] | None = None) -> list[OHLCVBar]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     volumes = volumes or [1000] * len(closes)
     return [
         OHLCVBar(
@@ -73,7 +73,7 @@ def test_run_chart_agent_empty_data_returns_neutral():
         bars=[],
         source="none",
         mode=DataSourceMode.LIVE,
-        as_of=datetime.now(timezone.utc),
+        as_of=datetime.now(UTC),
     )
     with patch("agents.chart_agent.fetch_ohlcv", return_value=empty):
         signal = run_chart_agent("AAPL")
@@ -99,7 +99,7 @@ def test_run_chart_agent_uptrend_produces_bullish():
         bars=bars,
         source="test",
         mode=DataSourceMode.LIVE,
-        as_of=datetime.now(timezone.utc),
+        as_of=datetime.now(UTC),
     )
     with patch("agents.chart_agent.fetch_ohlcv", return_value=series):
         signal = run_chart_agent("AAPL")

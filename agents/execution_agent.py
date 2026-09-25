@@ -11,10 +11,10 @@ The client_order_id passed to the broker makes that retry safe: see
 broker/sim_broker.py and broker/alpaca_broker.py for how each broker
 prevents a retried submission from becoming a double fill.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from agents.risk_agent import RiskDecision
 from agents.signal_merger import MergedSignal
@@ -25,7 +25,7 @@ from broker.protocol import Broker, OrderResult
 class ExecutionResult:
     ticker: str
     executed: bool
-    order: Optional[OrderResult]
+    order: OrderResult | None
     notes: str
 
 
@@ -54,18 +54,18 @@ def run_execution_agent(
     # Deterministic per-decision id: the same (approved) decision retried
     # produces the same client_order_id, which is what makes the retry
     # loop below safe against double-submission.
-    client_order_id = (
-        f"{risk_decision.ticker}-{merged_signal.direction}-{risk_decision.proposed_shares}"
-    )
+    client_order_id = f"{risk_decision.ticker}-{merged_signal.direction}-{risk_decision.proposed_shares}"
 
     last_error = "unknown error"
     for attempt in range(max_retries + 1):
         try:
             order = broker.submit_order(
-                risk_decision.ticker, side, risk_decision.proposed_shares,
+                risk_decision.ticker,
+                side,
+                risk_decision.proposed_shares,
                 client_order_id=client_order_id,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
             continue
 

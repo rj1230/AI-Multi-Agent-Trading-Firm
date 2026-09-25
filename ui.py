@@ -6,6 +6,8 @@ Purpose
 Interactive Streamlit console for understanding and monitoring the
 multi-agent trading system.
 
+The UI is observational. It does not change trading strategy logic.
+
 Architecture
 
     NewsAgent ───────┐
@@ -29,7 +31,16 @@ Architecture
            ▼
        Broker / Fill
 
-The UI is observational. It does not change trading strategy logic.
+Persistence
+
+    Backtest
+        │
+        ├── JSON result ───────► Backtest Lab
+        │
+        └── SQLite audit ─────► Run Audit
+                                   │
+                                   ├── runs
+                                   └── trade_traces
 """
 
 from __future__ import annotations
@@ -37,6 +48,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import sqlite3
 import sys
 import time
 import uuid
@@ -54,9 +66,26 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-LEDGER_PATH = Path(os.getenv("LEDGER_PATH", "portfolio/ledger.json"))
+LEDGER_PATH = Path(
+    os.getenv(
+        "LEDGER_PATH",
+        "portfolio/ledger.json",
+    )
+)
 
-BACKTEST_RESULTS_DIR = Path(os.getenv("BACKTEST_RESULTS_DIR", "backtest/results"))
+BACKTEST_RESULTS_DIR = Path(
+    os.getenv(
+        "BACKTEST_RESULTS_DIR",
+        "backtest/results",
+    )
+)
+
+AUDIT_DB_PATH = Path(
+    os.getenv(
+        "TRADING_FIRM_DB_PATH",
+        "storage/trading_firm.db",
+    )
+)
 
 TRADING_MODE = os.getenv(
     "TRADING_MODE",
@@ -108,7 +137,11 @@ st.set_page_config(
 
 
 def display_html(markup: str) -> None:
-    native = getattr(st, "html", None)
+    native = getattr(
+        st,
+        "html",
+        None,
+    )
 
     if callable(native):
         native(markup)
@@ -126,48 +159,78 @@ def esc(value) -> str:
     )
 
 
-def fmt_money(value, default="—") -> str:
+def fmt_money(
+    value,
+    default="—",
+) -> str:
     try:
         return f"${float(value):,.2f}"
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return default
 
 
-def fmt_pct(value, default="—") -> str:
+def fmt_pct(
+    value,
+    default="—",
+) -> str:
     if value is None:
         return default
 
     try:
         return f"{float(value):+.2%}"
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return default
 
 
-def fmt_num(value, decimals=3, default="—") -> str:
+def fmt_num(
+    value,
+    decimals=3,
+    default="—",
+) -> str:
     if value is None:
         return default
 
     try:
         return f"{float(value):.{decimals}f}"
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return default
 
 
-def fmt_shares(value, default="—") -> str:
+def fmt_shares(
+    value,
+    default="—",
+) -> str:
     try:
         return f"{float(value):.3f}"
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return default
 
 
 def safe_float(value):
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
 
 
-def outcome_label(outcome: str | None) -> str:
+def outcome_label(
+    outcome: str | None,
+) -> str:
     return {
         "executed": "EXECUTED",
         "held_local_reject": "LOCAL RISK BLOCK",
@@ -179,7 +242,9 @@ def outcome_label(outcome: str | None) -> str:
     )
 
 
-def outcome_class(outcome: str | None) -> str:
+def outcome_class(
+    outcome: str | None,
+) -> str:
     if outcome == "executed":
         return "success"
 
@@ -195,7 +260,9 @@ def outcome_class(outcome: str | None) -> str:
     return "neutral"
 
 
-def direction_class(direction: str | None) -> str:
+def direction_class(
+    direction: str | None,
+) -> str:
     if direction == "bullish":
         return "bull"
 
@@ -203,6 +270,20 @@ def direction_class(direction: str | None) -> str:
         return "bear"
 
     return "neutral"
+
+
+def first_value(
+    data: dict,
+    *keys,
+    default=None,
+):
+    for key in keys:
+        value = data.get(key)
+
+        if value is not None:
+            return value
+
+    return default
 
 
 # ============================================================
@@ -667,8 +748,14 @@ st.markdown(
 # ============================================================
 
 
-@st.cache_data(ttl=5, show_spinner=False)
-def load_json_file(path_str: str, mtime: float):
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def load_json_file(
+    path_str: str,
+    mtime: float,
+):
     path = Path(path_str)
 
     if not path.exists():
@@ -688,8 +775,13 @@ def load_json_file(path_str: str, mtime: float):
         return None
 
 
-@st.cache_data(ttl=5, show_spinner=False)
-def list_backtest_runs(dir_str: str):
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def list_backtest_runs(
+    dir_str: str,
+):
     directory = Path(dir_str)
 
     if not directory.exists():
@@ -718,7 +810,9 @@ def load_ledger():
     )
 
 
-def load_run(filename: str):
+def load_run(
+    filename: str,
+):
     path = BACKTEST_RESULTS_DIR / filename
 
     if not path.exists():
@@ -731,11 +825,331 @@ def load_run(filename: str):
 
 
 # ============================================================
+# SQLITE AUDIT LOADERS
+# ============================================================
+
+
+def _sqlite_rows(
+    query: str,
+    params=(),
+):
+    """
+    Execute a read-only SQLite query against the persistent audit DB.
+
+    The UI treats SQLite as an observational data source.
+    """
+    if not AUDIT_DB_PATH.exists():
+        return []
+
+    connection = None
+
+    try:
+        connection = sqlite3.connect(AUDIT_DB_PATH)
+
+        connection.row_factory = sqlite3.Row
+
+        rows = connection.execute(
+            query,
+            params,
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    except sqlite3.Error:
+        return []
+
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def list_audit_runs(
+    db_path_str: str,
+):
+    """
+    Return persisted run records.
+
+    The query intentionally selects the known run-audit fields instead
+    of depending on RunAuditStore's Python API.
+    """
+    db_path = Path(db_path_str)
+
+    if not db_path.exists():
+        return []
+
+    return _sqlite_rows(
+        """
+        SELECT
+            run_id,
+            status,
+            started_at,
+            finished_at,
+            start_date,
+            end_date,
+            tickers,
+            starting_equity,
+            final_equity,
+            realized_pnl,
+            benchmark_return,
+            trade_trace_count,
+            metadata
+        FROM runs
+        ORDER BY
+            COALESCE(
+                finished_at,
+                started_at
+            ) DESC
+        """
+    )
+
+
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def load_audit_run(
+    db_path_str: str,
+    run_id: str,
+):
+    """
+    Load one persisted run and all of its trade traces.
+    """
+    db_path = Path(db_path_str)
+
+    if not db_path.exists():
+        return None
+
+    runs = _sqlite_rows(
+        """
+        SELECT *
+        FROM runs
+        WHERE run_id = ?
+        LIMIT 1
+        """,
+        (run_id,),
+    )
+
+    if not runs:
+        return None
+
+    traces = _sqlite_rows(
+        """
+        SELECT *
+        FROM trade_traces
+        WHERE run_id = ?
+        ORDER BY
+            COALESCE(
+                simulated_date,
+                created_at
+            ),
+            ticker,
+            id
+        """,
+        (run_id,),
+    )
+
+    return {
+        "run": runs[0],
+        "traces": traces,
+    }
+
+
+def parse_json_value(
+    value,
+    default=None,
+):
+    if value is None:
+        return default
+
+    if isinstance(
+        value,
+        (
+            dict,
+            list,
+        ),
+    ):
+        return value
+
+    if not isinstance(
+        value,
+        str,
+    ):
+        return value
+
+    try:
+        return json.loads(value)
+    except (
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        return default
+
+
+def normalize_audit_trace(
+    trace: dict,
+) -> dict:
+    """
+    Normalize SQLite trade-trace columns into UI vocabulary.
+
+    This keeps the dashboard tolerant of small storage naming differences
+    while preserving the canonical trace semantics.
+    """
+    metadata = parse_json_value(
+        trace.get("metadata"),
+        {},
+    )
+
+    if not isinstance(
+        metadata,
+        dict,
+    ):
+        metadata = {}
+
+    risk_checks = parse_json_value(
+        trace.get("risk_checks"),
+        [],
+    )
+
+    if not isinstance(
+        risk_checks,
+        list,
+    ):
+        risk_checks = []
+
+    risk_notes = parse_json_value(
+        trace.get("risk_notes"),
+        [],
+    )
+
+    if not isinstance(
+        risk_notes,
+        list,
+    ):
+        risk_notes = []
+
+    return {
+        **trace,
+        "metadata": metadata,
+        "risk_checks": risk_checks,
+        "risk_notes": risk_notes,
+        "ticker": first_value(
+            trace,
+            "ticker",
+            default="—",
+        ),
+        "tick_id": first_value(
+            trace,
+            "tick_id",
+            default="—",
+        ),
+        "simulated_date": first_value(
+            trace,
+            "simulated_date",
+            "date",
+            default="—",
+        ),
+        "outcome": first_value(
+            trace,
+            "outcome",
+            default="unknown",
+        ),
+        "signal_direction": first_value(
+            trace,
+            "signal_direction",
+            default="neutral",
+        ),
+        "signal_confidence": first_value(
+            trace,
+            "signal_confidence",
+            default=None,
+        ),
+        "merge_agreement": first_value(
+            trace,
+            "merge_agreement",
+            default=None,
+        ),
+        "risk_decision": first_value(
+            trace,
+            "risk_decision",
+            default=None,
+        ),
+        "proposed_shares": first_value(
+            trace,
+            "proposed_shares",
+            default=None,
+        ),
+        "final_shares": first_value(
+            trace,
+            "final_shares",
+            default=None,
+        ),
+        "execution_side": first_value(
+            trace,
+            "execution_side",
+            default=None,
+        ),
+        "execution_attempted": first_value(
+            trace,
+            "execution_attempted",
+            default=False,
+        ),
+        "execution_success": first_value(
+            trace,
+            "execution_success",
+            default=None,
+        ),
+        "average_cost": first_value(
+            trace,
+            "average_cost",
+            default=None,
+        ),
+        "realized_pnl": first_value(
+            trace,
+            "realized_pnl",
+            default=None,
+        ),
+        "remaining_shares": first_value(
+            trace,
+            "remaining_shares",
+            default=None,
+        ),
+        "position_closed": first_value(
+            trace,
+            "position_closed",
+            default=None,
+        ),
+    }
+
+
+def parse_run_metadata(
+    run: dict,
+):
+    metadata = parse_json_value(
+        run.get("metadata"),
+        {},
+    )
+
+    if isinstance(
+        metadata,
+        dict,
+    ):
+        return metadata
+
+    return {}
+
+
+# ============================================================
 # LEDGER NORMALIZATION
 # ============================================================
 
 
-def normalize_ledger(raw):
+def normalize_ledger(
+    raw,
+):
     if not raw:
         return {
             "equity": None,
@@ -754,7 +1168,10 @@ def normalize_ledger(raw):
         market_value = 0.0
 
         for pos in positions.values():
-            if isinstance(pos, dict):
+            if isinstance(
+                pos,
+                dict,
+            ):
                 market_value += safe_float(pos.get("market_value")) or 0.0
 
         if cash is not None:
@@ -781,14 +1198,22 @@ NEWS_LABELS = {
 }
 
 
-def normalize_news_status(value):
+def normalize_news_status(
+    value,
+):
     if value is None:
         return None
 
-    if isinstance(value, dict):
+    if isinstance(
+        value,
+        dict,
+    ):
         value = value.get("availability")
 
-    if hasattr(value, "value"):
+    if hasattr(
+        value,
+        "value",
+    ):
         value = value.value
 
     value = str(value).lower().strip()
@@ -796,7 +1221,9 @@ def normalize_news_status(value):
     return value if value in NEWS_LABELS else None
 
 
-def extract_news_quality(run_data):
+def extract_news_quality(
+    run_data,
+):
     raw = run_data.get("news_availability")
 
     result = {
@@ -813,13 +1240,19 @@ def extract_news_quality(run_data):
 
     by_ticker = {}
 
-    if isinstance(raw, dict):
+    if isinstance(
+        raw,
+        dict,
+    ):
         candidate = raw.get("by_ticker")
 
         if candidate is None:
             candidate = raw.get("tickers")
 
-        if isinstance(candidate, dict):
+        if isinstance(
+            candidate,
+            dict,
+        ):
             for ticker, value in candidate.items():
                 status = normalize_news_status(value)
 
@@ -858,10 +1291,16 @@ def extract_news_quality(run_data):
 
     result["total"] = len(by_ticker)
 
-    if isinstance(raw, dict):
+    if isinstance(
+        raw,
+        dict,
+    ):
         summary = raw.get("summary")
 
-        if isinstance(summary, dict):
+        if isinstance(
+            summary,
+            dict,
+        ):
             source = summary
         else:
             source = raw
@@ -875,7 +1314,10 @@ def extract_news_quality(run_data):
             if key in source:
                 try:
                     result[key] = int(source[key] or 0)
-                except (TypeError, ValueError):
+                except (
+                    TypeError,
+                    ValueError,
+                ):
                     pass
 
         coverage = source.get("coverage")
@@ -909,25 +1351,59 @@ def extract_news_quality(run_data):
 # ============================================================
 
 PIPELINE = [
-    ("1", "NewsAgent", "Market/news"),
-    ("2", "ChartAgent", "Technicals"),
-    ("3", "SignalMerger", "Deterministic"),
-    ("4", "RiskAgent", "Position sizing"),
-    ("5", "Portfolio", "Book-level risk"),
-    ("6", "Execution", "Broker / Hold"),
+    (
+        "1",
+        "NewsAgent",
+        "Market/news",
+    ),
+    (
+        "2",
+        "ChartAgent",
+        "Technicals",
+    ),
+    (
+        "3",
+        "SignalMerger",
+        "Deterministic",
+    ),
+    (
+        "4",
+        "RiskAgent",
+        "Position sizing",
+    ),
+    (
+        "5",
+        "Portfolio",
+        "Book-level risk",
+    ),
+    (
+        "6",
+        "Execution",
+        "Broker / Hold",
+    ),
 ]
 
 
 def render_architecture():
     nodes = []
 
-    for index, name, description in PIPELINE:
+    for (
+        index,
+        name,
+        description,
+    ) in PIPELINE:
         nodes.append(
             f"""
             <div class="arch-node">
-                <div class="number">{index}</div>
-                <strong>{esc(name)}</strong>
-                <small>{esc(description)}</small>
+                <div class="number">
+                    {index}
+                </div>
+                <strong>
+                    {esc(name)}
+                </strong>
+                <small>
+                    {esc(description)}
+                </small>
             </div>
             """
         )
@@ -944,13 +1420,23 @@ def render_architecture():
 def render_pipeline():
     nodes = []
 
-    for index, name, description in PIPELINE:
+    for (
+        index,
+        name,
+        description,
+    ) in PIPELINE:
         nodes.append(
             f"""
             <div class="pipeline-step active">
-                <div class="index">{index}</div>
-                <strong>{esc(name)}</strong>
-                <small>{esc(description)}</small>
+                <div class="index">
+                    {index}
+                </div>
+                <strong>
+                    {esc(name)}
+                </strong>
+                <small>
+                    {esc(description)}
+                </small>
             </div>
             """
         )
@@ -991,7 +1477,9 @@ def render_agent_card(
 
             <div class="agent-detail">
                 Confidence:
-                <b>{fmt_num(confidence, 3)}</b>
+                <b>
+                    {fmt_num(confidence, 3)}
+                </b>
                 <br/>
                 {esc(detail)}
             </div>
@@ -1001,7 +1489,9 @@ def render_agent_card(
     )
 
 
-def render_decision(entry):
+def render_decision(
+    entry,
+):
     outcome = entry.get("outcome")
 
     ticker = entry.get(
@@ -1077,15 +1567,7 @@ def render_decision(entry):
         """
     )
 
-    # --------------------------------------------------------
-    # PIPELINE
-    # --------------------------------------------------------
-
     render_pipeline()
-
-    # --------------------------------------------------------
-    # AGENT SIGNALS
-    # --------------------------------------------------------
 
     st.markdown("#### Agent decisions")
 
@@ -1136,34 +1618,26 @@ def render_decision(entry):
             ),
         )
 
-    # --------------------------------------------------------
-    # RISK / EXECUTION
-    # --------------------------------------------------------
-
     c1, c2 = st.columns(2)
 
     with c1:
         st.markdown("#### RiskAgent")
 
-        risk_html = "".join(
-            [
-                f"""
-                <div class="reason-box">
-                    <strong>Risk decision:</strong>
-                    {esc(risk_decision or "—")}
-                    <br/>
-                    <strong>Entry:</strong>
-                    {fmt_money(entry_price)}
-                    <br/>
-                    <strong>ATR:</strong>
-                    {fmt_num(atr, 4)}
-                    <br/>
-                    <strong>Proposed shares:</strong>
-                    {fmt_shares(proposed_shares)}
-                </div>
-                """
-            ]
-        )
+        risk_html = f"""
+        <div class="reason-box">
+            <strong>Risk decision:</strong>
+            {esc(risk_decision or "—")}
+            <br/>
+            <strong>Entry:</strong>
+            {fmt_money(entry_price)}
+            <br/>
+            <strong>ATR:</strong>
+            {fmt_num(atr, 4)}
+            <br/>
+            <strong>Proposed shares:</strong>
+            {fmt_shares(proposed_shares)}
+        </div>
+        """
 
         display_html(risk_html)
 
@@ -1195,10 +1669,6 @@ def render_decision(entry):
         else:
             st.info("Execution was not attempted. The trade was blocked upstream.")
 
-        # NOTE: this block previously called st.markdown(...) directly without
-        # unsafe_allow_html=True, which made Streamlit print the raw HTML tags
-        # as literal text instead of rendering the box. Routing it through
-        # display_html() (like every other HTML block in this file) fixes it.
         display_html(
             f"""
             <div class="reason-box">
@@ -1213,10 +1683,6 @@ def render_decision(entry):
             </div>
             """
         )
-
-    # --------------------------------------------------------
-    # FINAL EXPLANATION
-    # --------------------------------------------------------
 
     notes = entry.get(
         "notes",
@@ -1279,6 +1745,8 @@ with st.sidebar:
 
     st.write(f"**Backtests:** `{len(backtest_runs)}`")
 
+    st.write(f"**Audit DB:** `{'FOUND' if AUDIT_DB_PATH.exists() else 'NOT FOUND'}`")
+
     st.write(f"**Ledger:** `{'FOUND' if raw_ledger else 'NOT FOUND'}`")
 
     st.divider()
@@ -1289,6 +1757,8 @@ with st.sidebar:
     ):
         load_json_file.clear()
         list_backtest_runs.clear()
+        list_audit_runs.clear()
+        load_audit_run.clear()
 
         st.rerun()
 
@@ -1335,6 +1805,7 @@ with st.sidebar:
                     start_date=str(bt_start),
                     end_date=str(bt_end),
                     tick_delay_seconds=bt_delay,
+                    run_id=run_id,
                 )
 
                 BACKTEST_RESULTS_DIR.mkdir(
@@ -1355,6 +1826,8 @@ with st.sidebar:
             st.session_state.selected_run = f"{run_id}.json"
 
             list_backtest_runs.clear()
+            list_audit_runs.clear()
+            load_audit_run.clear()
 
             st.success(f"Completed {len(result.tick_log)} ticks.")
 
@@ -1414,11 +1887,18 @@ display_html(
 # TABS
 # ============================================================
 
-tab_dashboard, tab_decisions, tab_backtest, tab_data = st.tabs(
+(
+    tab_dashboard,
+    tab_decisions,
+    tab_backtest,
+    tab_audit,
+    tab_data,
+) = st.tabs(
     [
         "🧠 Command Center",
         "🔎 Decision Explorer",
         "📊 Backtest Lab",
+        "🧾 Run Audit",
         "🗄️ Data & System",
     ]
 )
@@ -1450,9 +1930,13 @@ with tab_dashboard:
         )
 
         equity = ledger.get("equity")
+
         starting = ledger.get("starting_equity")
 
-        if equity is not None and starting not in (None, 0):
+        if equity is not None and starting not in (
+            None,
+            0,
+        ):
             portfolio_return = float(equity) / float(starting) - 1
         else:
             portfolio_return = None
@@ -1473,7 +1957,7 @@ with tab_dashboard:
                 fmt_pct(portfolio_return),
                 (
                     "green"
-                    if portfolio_return is not None and portfolio_return >= 0
+                    if (portfolio_return is not None and portfolio_return >= 0)
                     else "red"
                 ),
             ),
@@ -1502,7 +1986,11 @@ with tab_dashboard:
                     </div>
                 </div>
                 """
-                for label, value, cls in kpis
+                for (
+                    label,
+                    value,
+                    cls,
+                ) in kpis
             )
             + "</div>"
         )
@@ -1517,7 +2005,10 @@ with tab_dashboard:
 
             rows = []
 
-            for ticker, position in positions.items():
+            for (
+                ticker,
+                position,
+            ) in positions.items():
                 if not isinstance(
                     position,
                     dict,
@@ -1562,7 +2053,7 @@ with tab_decisions:
     else:
         default_run = (
             st.session_state.selected_run
-            if st.session_state.selected_run in backtest_runs
+            if (st.session_state.selected_run in backtest_runs)
             else backtest_runs[0]
         )
 
@@ -1656,7 +2147,7 @@ with tab_backtest:
     else:
         default_run = (
             st.session_state.selected_run
-            if st.session_state.selected_run in backtest_runs
+            if (st.session_state.selected_run in backtest_runs)
             else backtest_runs[0]
         )
 
@@ -1701,8 +2192,10 @@ with tab_backtest:
                     fmt_pct(total_return),
                     (
                         "green"
-                        if safe_float(total_return) is not None
-                        and safe_float(total_return) >= 0
+                        if (
+                            safe_float(total_return) is not None
+                            and safe_float(total_return) >= 0
+                        )
                         else "red"
                     ),
                 ),
@@ -1716,14 +2209,19 @@ with tab_backtest:
                     fmt_pct(excess_return),
                     (
                         "green"
-                        if safe_float(excess_return) is not None
-                        and safe_float(excess_return) >= 0
+                        if (
+                            safe_float(excess_return) is not None
+                            and safe_float(excess_return) >= 0
+                        )
                         else "red"
                     ),
                 ),
                 (
                     "Sharpe",
-                    fmt_num(sharpe, 2),
+                    fmt_num(
+                        sharpe,
+                        2,
+                    ),
                     "",
                 ),
                 (
@@ -1751,14 +2249,14 @@ with tab_backtest:
                         </div>
                     </div>
                     """
-                    for label, value, cls in kpis
+                    for (
+                        label,
+                        value,
+                        cls,
+                    ) in kpis
                 )
                 + "</div>"
             )
-
-            # ------------------------------------------------
-            # TELEMETRY
-            # ------------------------------------------------
 
             st.markdown("#### Trading pipeline telemetry")
 
@@ -1825,14 +2323,13 @@ with tab_backtest:
                         </div>
                     </div>
                     """
-                    for label, value in telemetry
+                    for (
+                        label,
+                        value,
+                    ) in telemetry
                 )
                 + "</div>"
             )
-
-            # ------------------------------------------------
-            # OUTCOME BREAKDOWN
-            # ------------------------------------------------
 
             tick_log = run_data.get(
                 "tick_log",
@@ -1859,10 +2356,6 @@ with tab_backtest:
                 st.markdown("#### Decision outcomes")
 
                 st.bar_chart(outcome_counts)
-
-            # ------------------------------------------------
-            # EQUITY CURVE
-            # ------------------------------------------------
 
             equity_curve = run_data.get(
                 "equity_curve",
@@ -1894,10 +2387,6 @@ with tab_backtest:
                         }
                     )
 
-            # ------------------------------------------------
-            # TRADES
-            # ------------------------------------------------
-
             st.markdown("#### Executed trades")
 
             if trades:
@@ -1925,6 +2414,543 @@ with tab_backtest:
 
             else:
                 st.info("No executed trades.")
+
+
+# ============================================================
+# RUN AUDIT
+# ============================================================
+
+with tab_audit:
+    st.markdown("### Persistent Run Audit")
+
+    st.caption(
+        "SQLite-backed audit history for reproducible trading "
+        "decisions, execution outcomes, and portfolio accounting."
+    )
+
+    audit_runs = list_audit_runs(str(AUDIT_DB_PATH))
+
+    if not audit_runs:
+        st.info(
+            "No persisted audit runs found. "
+            "Run a backtest to create the first audit record."
+        )
+
+    else:
+        run_ids = [str(run.get("run_id")) for run in audit_runs if run.get("run_id")]
+
+        selected_result_stem = None
+
+        if st.session_state.selected_run:
+            selected_result_stem = Path(st.session_state.selected_run).stem
+
+        if selected_result_stem in run_ids:
+            default_index = run_ids.index(selected_result_stem)
+        else:
+            default_index = 0
+
+        selected_audit_run = st.selectbox(
+            "Audit run",
+            run_ids,
+            index=default_index,
+            key="audit_run_selector",
+        )
+
+        audit_data = load_audit_run(
+            str(AUDIT_DB_PATH),
+            selected_audit_run,
+        )
+
+        if not audit_data:
+            st.error("Unable to load the selected audit run.")
+
+        else:
+            run = audit_data["run"]
+
+            traces = [normalize_audit_trace(trace) for trace in audit_data["traces"]]
+
+            status = run.get(
+                "status",
+                "unknown",
+            )
+
+            starting_equity = run.get("starting_equity")
+
+            final_equity = run.get("final_equity")
+
+            realized_pnl = run.get("realized_pnl")
+
+            benchmark_return = run.get("benchmark_return")
+
+            trade_trace_count = run.get("trade_trace_count")
+
+            if trade_trace_count is None:
+                trade_trace_count = len(traces)
+
+            summary = [
+                (
+                    "Status",
+                    str(status).upper(),
+                    (
+                        "green"
+                        if str(status).lower()
+                        in {
+                            "completed",
+                            "success",
+                            "finished",
+                        }
+                        else ""
+                    ),
+                ),
+                (
+                    "Starting equity",
+                    fmt_money(starting_equity),
+                    "",
+                ),
+                (
+                    "Final equity",
+                    fmt_money(final_equity),
+                    "",
+                ),
+                (
+                    "Realized P&L",
+                    fmt_money(realized_pnl),
+                    (
+                        "green"
+                        if (
+                            safe_float(realized_pnl) is not None
+                            and safe_float(realized_pnl) >= 0
+                        )
+                        else "red"
+                    ),
+                ),
+                (
+                    "Benchmark",
+                    fmt_pct(benchmark_return),
+                    "",
+                ),
+                (
+                    "Trade traces",
+                    trade_trace_count,
+                    "",
+                ),
+            ]
+
+            display_html(
+                '<div class="kpi-grid">'
+                + "".join(
+                    f"""
+                    <div class="kpi">
+                        <div class="label">
+                            {esc(label)}
+                        </div>
+                        <div class="value {cls}">
+                            {esc(value)}
+                        </div>
+                    </div>
+                    """
+                    for (
+                        label,
+                        value,
+                        cls,
+                    ) in summary
+                )
+                + "</div>"
+            )
+
+            # ------------------------------------------------
+            # RUN METADATA
+            # ------------------------------------------------
+
+            with st.expander("Run metadata"):
+                metadata = parse_run_metadata(run)
+
+                if metadata:
+                    st.json(metadata)
+                else:
+                    st.caption("No run metadata recorded.")
+
+            # ------------------------------------------------
+            # RUN LIFECYCLE
+            # ------------------------------------------------
+
+            st.markdown("#### Run lifecycle")
+
+            lifecycle_rows = [
+                {
+                    "Field": "Run ID",
+                    "Value": run.get(
+                        "run_id",
+                        "—",
+                    ),
+                },
+                {
+                    "Field": "Status",
+                    "Value": run.get(
+                        "status",
+                        "—",
+                    ),
+                },
+                {
+                    "Field": "Started",
+                    "Value": run.get(
+                        "started_at",
+                        "—",
+                    ),
+                },
+                {
+                    "Field": "Finished",
+                    "Value": run.get(
+                        "finished_at",
+                        "—",
+                    ),
+                },
+                {
+                    "Field": "Start date",
+                    "Value": run.get(
+                        "start_date",
+                        "—",
+                    ),
+                },
+                {
+                    "Field": "End date",
+                    "Value": run.get(
+                        "end_date",
+                        "—",
+                    ),
+                },
+                {
+                    "Field": "Tickers",
+                    "Value": run.get(
+                        "tickers",
+                        "—",
+                    ),
+                },
+            ]
+
+            st.dataframe(
+                lifecycle_rows,
+                width="stretch",
+                hide_index=True,
+            )
+
+            # ------------------------------------------------
+            # TRACE FILTERS
+            # ------------------------------------------------
+
+            st.markdown("#### Decision traces")
+
+            if not traces:
+                st.info("No trade traces were persisted for this run.")
+
+            else:
+                tickers = sorted(
+                    {
+                        str(trace.get("ticker"))
+                        for trace in traces
+                        if trace.get("ticker")
+                    }
+                )
+
+                outcomes = sorted(
+                    {
+                        str(trace.get("outcome"))
+                        for trace in traces
+                        if trace.get("outcome")
+                    }
+                )
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    trace_ticker = st.selectbox(
+                        "Ticker",
+                        ["All"] + tickers,
+                        key="audit_ticker_filter",
+                    )
+
+                with c2:
+                    trace_outcome = st.selectbox(
+                        "Outcome",
+                        ["All"] + outcomes,
+                        key="audit_outcome_filter",
+                        format_func=outcome_label,
+                    )
+
+                filtered_traces = [
+                    trace
+                    for trace in traces
+                    if (trace_ticker == "All" or trace.get("ticker") == trace_ticker)
+                    and (
+                        trace_outcome == "All" or trace.get("outcome") == trace_outcome
+                    )
+                ]
+
+                st.caption(f"{len(filtered_traces)} persisted trace(s)")
+
+                # ------------------------------------------------
+                # TRACE TABLE
+                # ------------------------------------------------
+
+                rows = []
+
+                for trace in filtered_traces:
+                    rows.append(
+                        {
+                            "Ticker": trace.get(
+                                "ticker",
+                                "—",
+                            ),
+                            "Tick": trace.get(
+                                "tick_id",
+                                "—",
+                            ),
+                            "Date": trace.get(
+                                "simulated_date",
+                                "—",
+                            ),
+                            "Signal": str(
+                                trace.get(
+                                    "signal_direction",
+                                    "—",
+                                )
+                                or "—"
+                            ).upper(),
+                            "Confidence": fmt_num(
+                                trace.get("signal_confidence"),
+                                3,
+                            ),
+                            "Risk": trace.get(
+                                "risk_decision",
+                                "—",
+                            ),
+                            "Shares": fmt_shares(trace.get("final_shares")),
+                            "Execution": (trace.get("execution_side") or "—"),
+                            "Outcome": outcome_label(trace.get("outcome")),
+                        }
+                    )
+
+                st.dataframe(
+                    rows,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+                # ------------------------------------------------
+                # INDIVIDUAL TRACE
+                # ------------------------------------------------
+
+                if filtered_traces:
+                    selected_trace_index = st.selectbox(
+                        "Inspect persisted trace",
+                        range(len(filtered_traces)),
+                        format_func=lambda i: (
+                            f"{filtered_traces[i].get('ticker', '—')} · "
+                            f"{filtered_traces[i].get('simulated_date', '—')} · "
+                            f"{outcome_label(filtered_traces[i].get('outcome'))}"
+                        ),
+                        key="audit_trace_selector",
+                    )
+
+                    trace = filtered_traces[selected_trace_index]
+
+                    st.markdown("#### Decision lineage")
+
+                    signal_direction = trace.get("signal_direction")
+
+                    execution_side = trace.get("execution_side")
+
+                    risk_decision = trace.get("risk_decision")
+
+                    c1, c2, c3 = st.columns(3)
+
+                    with c1:
+                        st.markdown("**SignalMerger**")
+
+                        st.metric(
+                            "Direction",
+                            str(signal_direction or "—").upper(),
+                        )
+
+                        st.caption(
+                            "Confidence: "
+                            + fmt_num(
+                                trace.get("signal_confidence"),
+                                3,
+                            )
+                        )
+
+                    with c2:
+                        st.markdown("**Risk / Coordinator**")
+
+                        st.metric(
+                            "Risk",
+                            str(risk_decision or "—").upper(),
+                        )
+
+                        st.caption(
+                            "Proposed shares: "
+                            + fmt_shares(trace.get("proposed_shares"))
+                            + " · Final: "
+                            + fmt_shares(trace.get("final_shares"))
+                        )
+
+                    with c3:
+                        st.markdown("**Execution**")
+
+                        st.metric(
+                            "Side",
+                            str(execution_side or "—").upper(),
+                        )
+
+                        st.caption("Success: " + str(trace.get("execution_success")))
+
+                    # ------------------------------------------------
+                    # NEWS / CHART
+                    # ------------------------------------------------
+
+                    st.markdown("#### Agent evidence")
+
+                    c1, c2 = st.columns(2)
+
+                    with c1:
+                        st.markdown("**NewsAgent**")
+
+                        news_rows = [
+                            {
+                                "Field": "Direction",
+                                "Value": str(
+                                    first_value(
+                                        trace,
+                                        "news_direction",
+                                        default="—",
+                                    )
+                                ).upper(),
+                            },
+                            {
+                                "Field": "Confidence",
+                                "Value": fmt_num(
+                                    first_value(
+                                        trace,
+                                        "news_confidence",
+                                    ),
+                                    3,
+                                ),
+                            },
+                            {
+                                "Field": "Availability",
+                                "Value": first_value(
+                                    trace,
+                                    "news_availability",
+                                    default="—",
+                                ),
+                            },
+                            {
+                                "Field": "Article count",
+                                "Value": first_value(
+                                    trace,
+                                    "news_article_count",
+                                    default="—",
+                                ),
+                            },
+                            {
+                                "Field": "Source",
+                                "Value": first_value(
+                                    trace,
+                                    "news_source",
+                                    default="—",
+                                ),
+                            },
+                        ]
+
+                        st.dataframe(
+                            news_rows,
+                            width="stretch",
+                            hide_index=True,
+                        )
+
+                    with c2:
+                        st.markdown("**ChartAgent**")
+
+                        chart_rows = [
+                            {
+                                "Field": "Direction",
+                                "Value": str(
+                                    first_value(
+                                        trace,
+                                        "chart_direction",
+                                        default="—",
+                                    )
+                                ).upper(),
+                            },
+                            {
+                                "Field": "Confidence",
+                                "Value": fmt_num(
+                                    first_value(
+                                        trace,
+                                        "chart_confidence",
+                                    ),
+                                    3,
+                                ),
+                            },
+                        ]
+
+                        st.dataframe(
+                            chart_rows,
+                            width="stretch",
+                            hide_index=True,
+                        )
+
+                    # ------------------------------------------------
+                    # ACCOUNTING
+                    # ------------------------------------------------
+
+                    st.markdown("#### Accounting")
+
+                    accounting_rows = [
+                        {
+                            "Field": "Average cost",
+                            "Value": fmt_money(trace.get("average_cost")),
+                        },
+                        {
+                            "Field": "Realized P&L",
+                            "Value": fmt_money(trace.get("realized_pnl")),
+                        },
+                        {
+                            "Field": "Remaining shares",
+                            "Value": fmt_shares(trace.get("remaining_shares")),
+                        },
+                        {
+                            "Field": "Position closed",
+                            "Value": str(trace.get("position_closed")),
+                        },
+                    ]
+
+                    st.dataframe(
+                        accounting_rows,
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+                    # ------------------------------------------------
+                    # RISK CHECKS
+                    # ------------------------------------------------
+
+                    risk_checks = (
+                        trace.get("risk_checks") or trace.get("risk_notes") or []
+                    )
+
+                    if risk_checks:
+                        with st.expander(f"Risk checks ({len(risk_checks)})"):
+                            for check in risk_checks:
+                                st.caption("• " + str(check))
+
+                    # ------------------------------------------------
+                    # RAW TRACE
+                    # ------------------------------------------------
+
+                    with st.expander("Raw persisted trace"):
+                        st.json(trace)
 
 
 # ============================================================
@@ -1977,7 +3003,10 @@ with tab_data:
                             status,
                         ),
                     }
-                    for ticker, status in sorted(quality["by_ticker"].items())
+                    for (
+                        ticker,
+                        status,
+                    ) in sorted(quality["by_ticker"].items())
                 ]
 
                 st.dataframe(
@@ -2043,6 +3072,10 @@ with tab_data:
             "Historical Replay",
             "No-lookahead OHLCV/news replay",
         ),
+        (
+            "SQLite Run Audit",
+            "Persistent run + trade-trace observability",
+        ),
     ]
 
     st.dataframe(
@@ -2051,7 +3084,10 @@ with tab_data:
                 "Component": name,
                 "Responsibility": responsibility,
             }
-            for name, responsibility in components
+            for (
+                name,
+                responsibility,
+            ) in components
         ],
         width="stretch",
         hide_index=True,
@@ -2078,6 +3114,38 @@ with tab_data:
             with st.expander("Backtest JSON"):
                 st.json(raw_run)
 
+    if AUDIT_DB_PATH.exists():
+        with st.expander("SQLite audit database"):
+            st.write(f"Path: `{AUDIT_DB_PATH}`")
+
+            audit_table_counts = {}
+
+            for table in [
+                "runs",
+                "trade_traces",
+                "trades",
+                "agent_logs",
+                "portfolio_snapshots",
+            ]:
+                rows = _sqlite_rows(f"SELECT COUNT(*) AS count FROM {table}")
+
+                audit_table_counts[table] = rows[0]["count"] if rows else 0
+
+            st.dataframe(
+                [
+                    {
+                        "Table": table,
+                        "Rows": count,
+                    }
+                    for (
+                        table,
+                        count,
+                    ) in audit_table_counts.items()
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+
 
 # ============================================================
 # FOOTER
@@ -2094,7 +3162,8 @@ display_html(
     ">
         AI Multi-Agent Trading Firm · LangGraph orchestration ·
         deterministic risk gating · historical replay ·
-        SimBroker / Alpaca · execution telemetry
+        SimBroker / Alpaca · execution telemetry ·
+        SQLite persistent audit
     </div>
     """
 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -9,6 +10,8 @@ import pytest
 from graph.state import RiskDecision, Signal, TradingState
 from orchestrator import tick_runner
 from portfolio.state import PortfolioSnapshot
+
+TEST_SIMULATED_DATE = datetime(2024, 6, 6, tzinfo=UTC)
 
 
 def _state(
@@ -125,6 +128,7 @@ def test_run_tick_executes_coordinator_approved_trade():
         execution succeeds
         broker-confirmed execution side is preserved
         TickResult is "executed"
+        successful BUY leaves the position open
     """
 
     state = _state(
@@ -172,8 +176,18 @@ def test_run_tick_executes_coordinator_approved_trade():
             tick_runner.nodes,
             "hold_node",
         ),
+        patch.object(
+            tick_runner,
+            "_current_position_shares",
+            return_value=10.0,
+        ),
     ):
-        results = asyncio.run(tick_runner.run_tick(["AAPL"]))
+        results = asyncio.run(
+            tick_runner.run_tick(
+                ["AAPL"],
+                simulated_date=TEST_SIMULATED_DATE,
+            )
+        )
 
     result = results["AAPL"]
 
@@ -184,6 +198,9 @@ def test_run_tick_executes_coordinator_approved_trade():
 
     assert result.shares == pytest.approx(10.0)
     assert result.proposed_shares == pytest.approx(10.0)
+
+    assert result.position_state == "open"
+    assert result.position_closed is False
 
     assert result.signal_direction == "bullish"
     assert result.signal_confidence == pytest.approx(0.95)
@@ -203,6 +220,7 @@ def test_run_tick_execution_failure_is_not_reported_as_executed():
         execution_success=False
         TickResult is "held_execution_reject"
         shares reported as zero
+        no position is considered closed
     """
 
     state = _state(
@@ -250,7 +268,12 @@ def test_run_tick_execution_failure_is_not_reported_as_executed():
             "hold_node",
         ),
     ):
-        results = asyncio.run(tick_runner.run_tick(["GOOGL"]))
+        results = asyncio.run(
+            tick_runner.run_tick(
+                ["GOOGL"],
+                simulated_date=TEST_SIMULATED_DATE,
+            )
+        )
 
     result = results["GOOGL"]
 
@@ -260,6 +283,9 @@ def test_run_tick_execution_failure_is_not_reported_as_executed():
     assert result.execution_success is False
 
     assert result.shares == pytest.approx(0.0)
+
+    assert result.position_state == "no_position"
+    assert result.position_closed is False
 
     assert result.notes == "simulated broker rejection"
 
@@ -274,6 +300,7 @@ def test_run_tick_local_risk_rejection_does_not_execute():
         ticker is not sent as a coordinator proposal
         execution is never called
         TickResult is "held_local_reject"
+        no position exists
     """
 
     state = _state(
@@ -326,7 +353,12 @@ def test_run_tick_local_risk_rejection_does_not_execute():
             "hold_node",
         ),
     ):
-        results = asyncio.run(tick_runner.run_tick(["AAPL"]))
+        results = asyncio.run(
+            tick_runner.run_tick(
+                ["AAPL"],
+                simulated_date=TEST_SIMULATED_DATE,
+            )
+        )
 
     result = results["AAPL"]
 
@@ -336,6 +368,9 @@ def test_run_tick_local_risk_rejection_does_not_execute():
     assert result.execution_success is None
 
     assert result.shares == pytest.approx(0.0)
+
+    assert result.position_state == "no_position"
+    assert result.position_closed is False
 
     assert execution_called is False
 
@@ -349,6 +384,7 @@ def test_run_tick_book_rejection_does_not_execute():
     Expected:
         execution is never called
         TickResult is "held_book_reject"
+        no position exists
     """
 
     state = _state(
@@ -397,7 +433,12 @@ def test_run_tick_book_rejection_does_not_execute():
             "hold_node",
         ),
     ):
-        results = asyncio.run(tick_runner.run_tick(["MSFT"]))
+        results = asyncio.run(
+            tick_runner.run_tick(
+                ["MSFT"],
+                simulated_date=TEST_SIMULATED_DATE,
+            )
+        )
 
     result = results["MSFT"]
 
@@ -407,6 +448,9 @@ def test_run_tick_book_rejection_does_not_execute():
     assert result.execution_success is None
 
     assert result.shares == pytest.approx(0.0)
+
+    assert result.position_state == "no_position"
+    assert result.position_closed is False
 
     assert "Book-level correlation rejection." in result.notes
 
@@ -475,8 +519,18 @@ def test_run_tick_preserves_news_and_signal_metadata():
             tick_runner.nodes,
             "hold_node",
         ),
+        patch.object(
+            tick_runner,
+            "_current_position_shares",
+            return_value=5.0,
+        ),
     ):
-        results = asyncio.run(tick_runner.run_tick(["JPM"]))
+        results = asyncio.run(
+            tick_runner.run_tick(
+                ["JPM"],
+                simulated_date=TEST_SIMULATED_DATE,
+            )
+        )
 
     result = results["JPM"]
 
@@ -497,6 +551,10 @@ def test_run_tick_preserves_news_and_signal_metadata():
     assert result.execution_attempted is True
     assert result.execution_success is True
     assert result.execution_side == "buy"
+
+    # Position lifecycle.
+    assert result.position_state == "open"
+    assert result.position_closed is False
 
     assert result.shares == pytest.approx(5.0)
     assert result.proposed_shares == pytest.approx(5.0)

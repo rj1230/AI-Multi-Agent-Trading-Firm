@@ -6,10 +6,11 @@ Regression coverage for:
 1. The backtest lookahead guard in data_sources/__init__.py.
 2. End-to-end RiskAgent position-cap clamping.
 3. Historical session discovery from OHLCV data.
-4. Full BUY -> SELL -> closed-position lifecycle.
-5. Realized P&L calculation during historical replay.
-6. Final backtest state capture after dependency cleanup.
-7. Restoration of backtest singletons and simulated-date state.
+4. Multi-ticker TradeTrace coverage.
+5. Full BUY -> SELL -> closed-position lifecycle.
+6. Realized P&L calculation during historical replay.
+7. Final backtest state capture after dependency cleanup.
+8. Restoration of backtest singletons and simulated-date state.
 
 The historical-data fixtures intentionally respect the simulated-date/as-of
 boundary. This is critical for preventing lookahead bias and for ensuring
@@ -39,15 +40,14 @@ def _fake_historical_ohlcv(
     lookback_days: int = 30,
 ) -> OHLCVSeries:
     """
-    Return deterministic historical bars for the ticker-cap test.
+    Return deterministic historical bars for the ticker-cap and
+    multi-ticker trace-coverage tests.
 
     The fixture provides four historical sessions ending at the supplied
     simulated date. All bars use the same close price so equity remains
-    deterministic while position sizing and ticker-cap behavior are tested.
+    deterministic while position sizing, ticker-cap behavior, and
+    TradeTrace coverage are tested.
     """
-
-    del ticker
-    del lookback_days
 
     base_date = simulated_date.replace(
         hour=0,
@@ -73,7 +73,7 @@ def _fake_historical_ohlcv(
         )
 
     return OHLCVSeries(
-        ticker="AAPL",
+        ticker=ticker,
         bars=bars,
         source="test_fixture",
         mode=DataSourceMode.BACKTEST,
@@ -83,15 +83,13 @@ def _fake_historical_ohlcv(
 
 def _fake_bullish_signal(ticker: str) -> Signal:
     """
-    Return a deterministic bullish signal for the ticker-cap test.
+    Return a deterministic bullish signal for integration tests.
     """
-
-    del ticker
 
     return Signal(
         direction="bullish",
         confidence=0.8,
-        rationale="test fixture",
+        rationale=f"test fixture for {ticker}",
     )
 
 
@@ -295,6 +293,147 @@ def test_backtest_runner_executes_then_clamps_on_ticker_cap(
     assert get_simulated_date() is None
 
 
+def test_backtest_multi_ticker_trace_coverage(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    Verify that every ticker/session processed by the backtest produces
+    exactly one tick-log entry and exactly one TradeTrace.
+
+    Configuration:
+
+        tickers = AAPL, MSFT
+        sessions = 4
+        expected ticks = 8
+        expected TradeTraces = 8
+
+    This verifies the integration invariant:
+
+        run_tick
+            -> TickResult
+            -> TradeTrace
+            -> tick_log
+            -> diagnostics
+
+    TradeTrace.simulated_date is serialized as a top-level field by
+    TradeTrace.to_dict(). The test therefore compares that top-level
+    value against the tick-log date after normalizing both to YYYY-MM-DD.
+    """
+
+    monkeypatch.setenv(
+        "TRADING_MODE",
+        "backtest",
+    )
+
+    monkeypatch.setattr(
+        historical_module,
+        "fetch_ohlcv",
+        _fake_historical_ohlcv,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_news_agent_with_metadata",
+        _fake_bullish_news_result,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_chart_agent",
+        _fake_bullish_signal,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "compute_atr",
+        lambda bars: FAKE_ATR,
+    )
+
+    from backtest.runner import _build_diagnostics, run_backtest
+
+    result = run_backtest(
+        tickers=["AAPL", "MSFT"],
+        start_date="2026-08-01",
+        end_date="2026-08-04",
+        starting_equity=100_000.0,
+        ledger_path=str(tmp_path / "multi_ticker_trace_ledger.json"),
+        tick_delay_seconds=0,
+    )
+
+    diagnostics = _build_diagnostics(result)
+
+    expected_ticks = 2 * 4
+
+    # ---------------------------------------------------------------
+    # Trace/tick cardinality
+    # ---------------------------------------------------------------
+
+    assert len(result.tick_log) == expected_ticks
+    assert len(result.trade_traces) == expected_ticks
+
+    assert diagnostics["tick_count"] == expected_ticks
+    assert diagnostics["trade_trace_count"] == expected_ticks
+    assert diagnostics["trace_coverage_complete"] is True
+    assert diagnostics["trade_trace_tickers"] == 2
+
+    # ---------------------------------------------------------------
+    # Every ticker/session pair must have exactly one tick and trace.
+    # ---------------------------------------------------------------
+
+    tick_keys = {
+        (
+            tick["date"],
+            tick["ticker"],
+        )
+        for tick in result.tick_log
+    }
+
+    trace_keys = {
+        (
+            trace["simulated_date"][:10],
+            trace["ticker"],
+        )
+        for trace in result.trade_traces
+    }
+
+    assert len(tick_keys) == expected_ticks
+    assert len(trace_keys) == expected_ticks
+
+    assert tick_keys == trace_keys
+
+    # ---------------------------------------------------------------
+    # Ticker coverage
+    # ---------------------------------------------------------------
+
+    assert {tick["ticker"] for tick in result.tick_log} == {
+        "AAPL",
+        "MSFT",
+    }
+
+    assert {trace["ticker"] for trace in result.trade_traces} == {
+        "AAPL",
+        "MSFT",
+    }
+
+    # ---------------------------------------------------------------
+    # Date coverage
+    # ---------------------------------------------------------------
+
+    expected_dates = {
+        "2026-08-01",
+        "2026-08-02",
+        "2026-08-03",
+        "2026-08-04",
+    }
+
+    assert {tick["date"] for tick in result.tick_log} == expected_dates
+
+    assert {
+        trace["simulated_date"][:10] for trace in result.trade_traces
+    } == expected_dates
+
+
 def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
     tmp_path,
     monkeypatch,
@@ -489,6 +628,7 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
     assert day1["remaining_shares"] > 0
 
     assert day1["position_closed"] is False
+    assert day1["position_state"] == "open"
 
     bought_shares = day1["remaining_shares"]
 
@@ -520,6 +660,7 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
     )
 
     assert day2["position_closed"] is True
+    assert day2["position_state"] == "closed"
 
     # ---------------------------------------------------------------
     # Realized P&L
@@ -557,7 +698,15 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
     )
 
     # ---------------------------------------------------------------
-    # Session 3: position remains closed
+    # Session 3: no position remains
+    #
+    # Important semantic distinction:
+    #
+    # position_closed=True means this tick successfully closed an
+    # existing position.
+    #
+    # Session 3 does not close anything. The position was already
+    # closed during Session 2, so Session 3 must report no_position.
     # ---------------------------------------------------------------
 
     day3 = result.tick_log[2]
@@ -567,7 +716,8 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
         abs=1e-9,
     )
 
-    assert day3["position_closed"] is True
+    assert day3["position_closed"] is False
+    assert day3["position_state"] == "no_position"
 
     assert len(result.trades) == 2
 

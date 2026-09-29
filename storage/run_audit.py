@@ -461,12 +461,16 @@ def _trace_key(
     simulated_date: datetime | None,
     tick_id: Any,
 ) -> str:
-    """Build a stable idempotency key for a trade trace."""
-    if tick_id is not None:
-        identity = str(tick_id)
-    elif simulated_date is not None:
-        identity = _isoformat(simulated_date)
-    else:
-        identity = "unscheduled"
+    """
+    Build a stable idempotency key for one ticker/session trace.
 
-    return f"{run_id}:{ticker}:{identity}"
+    A TradeTrace must be unique for its run, ticker, and historical
+    simulated session. tick_id is retained as additional context.
+    """
+    session_identity = (
+        _isoformat(simulated_date) if simulated_date is not None else "unscheduled"
+    )
+
+    tick_identity = str(tick_id) if tick_id is not None else "no-tick-id"
+
+    return f"{run_id}:{ticker}:{session_identity}:{tick_identity}"

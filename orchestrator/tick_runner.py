@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from data_sources import set_simulated_date
 from graph import nodes
 from graph.state import RiskDecision, TradingState
 from portfolio.coordinator import (
@@ -22,6 +23,13 @@ from telemetry.trade_trace import (
     SignalTrace,
     TradeTrace,
 )
+
+PositionState = Literal[
+    "no_position",
+    "open",
+    "partially_closed",
+    "closed",
+]
 
 
 @dataclass
@@ -56,7 +64,9 @@ class TickResult:
     average_cost: float | None = None
     realized_pnl: float | None = None
     remaining_shares: float | None = None
+
     position_closed: bool = False
+    position_state: PositionState = "no_position"
 
     news_availability: str | None = None
     news_article_count: int = 0
@@ -82,7 +92,24 @@ def _run_local_pipeline(
     ticker: str,
     run_id: str | None = None,
     tick_id: int | None = None,
+    simulated_date: datetime | None = None,
 ) -> TradingState:
+    """
+    Execute the local agent pipeline for one ticker.
+
+    The simulated date is deliberately established inside the worker
+    thread because this pipeline is executed through asyncio.to_thread().
+    This prevents historical data sources from falling back to the
+    real wall-clock date and protects the backtest from lookahead leakage.
+    """
+    if simulated_date is None:
+        raise ValueError(
+            f"Missing simulated_date for {ticker}; "
+            "refusing to fall back to wall-clock time."
+        )
+
+    set_simulated_date(simulated_date)
+
     state = TradingState(
         ticker=ticker,
         run_id=run_id,
@@ -147,33 +174,98 @@ def _decision_metadata(
     }
 
 
-def _position_metadata(
+def _current_position_shares(
     ticker: str,
-) -> dict:
+) -> float:
     portfolio = nodes.get_ledger().snapshot()
     position = portfolio.positions.get(ticker)
 
     if position is None:
-        return {
-            "remaining_shares": 0.0,
-            "position_closed": True,
-        }
+        return 0.0
 
-    remaining_shares = float(position.shares)
+    return float(position.shares)
+
+
+def _position_metadata(
+    ticker: str,
+    *,
+    previous_shares: float = 0.0,
+    execution_attempted: bool = False,
+    execution_success: bool | None = None,
+    execution_side: str | None = None,
+) -> dict:
+    """
+    Derive semantic position state.
+
+    A zero-share position is NOT automatically considered closed.
+    A position is closed only when a successful SELL transitions an
+    existing position to zero shares.
+
+    This distinguishes:
+
+        0 shares + never owned
+            -> no_position
+
+        existing shares
+            -> open
+
+        successful partial SELL
+            -> partially_closed
+
+        successful SELL from existing shares to zero
+            -> closed
+    """
+    remaining_shares = _current_position_shares(ticker)
+
+    previous_shares = max(float(previous_shares), 0.0)
+    remaining_shares = max(float(remaining_shares), 0.0)
+
+    successful_execution = execution_attempted is True and execution_success is True
+
+    actual_close = (
+        successful_execution
+        and execution_side == "sell"
+        and previous_shares > 1e-9
+        and remaining_shares <= 1e-9
+    )
+
+    actual_partial_close = (
+        successful_execution
+        and execution_side == "sell"
+        and previous_shares > 1e-9
+        and remaining_shares > 1e-9
+        and remaining_shares < previous_shares
+    )
+
+    if actual_close:
+        position_state: PositionState = "closed"
+    elif actual_partial_close:
+        position_state = "partially_closed"
+    elif remaining_shares > 1e-9:
+        position_state = "open"
+    else:
+        position_state = "no_position"
 
     return {
         "remaining_shares": remaining_shares,
-        "position_closed": remaining_shares <= 1e-9,
+        "position_closed": actual_close,
+        "position_state": position_state,
     }
 
 
 def _trade_side(
     state: TradingState,
 ) -> Literal["buy", "sell"]:
-    if state.merged_signal is not None and state.merged_signal.direction == "bullish":
+    if state.merged_signal is None:
+        raise ValueError("Cannot determine trade side without merged signal")
+
+    if state.merged_signal.direction == "bullish":
         return "buy"
 
-    return "sell"
+    if state.merged_signal.direction == "bearish":
+        return "sell"
+
+    raise ValueError(f"Unsupported trade direction: {state.merged_signal.direction}")
 
 
 def _accounting_metadata(
@@ -208,6 +300,7 @@ def _build_trade_trace(
     accounting=None,
     remaining_shares: float | None = None,
     position_closed: bool | None = None,
+    position_state: PositionState = "no_position",
     coordinator_approved: bool | None = None,
     coordinator_shares: float | None = None,
     coordinator_notes: list[str] | None = None,
@@ -275,6 +368,7 @@ def _build_trade_trace(
             "sector": state.sector,
             "atr": state.atr,
             "entry_price": state.entry_price,
+            "position_state": position_state,
         },
     )
 
@@ -285,6 +379,23 @@ async def run_tick(
     run_id: str = "runtime",
     simulated_date: datetime | None = None,
 ) -> dict[str, TickResult]:
+    """
+    Execute one deterministic trading tick.
+
+    A simulated date is mandatory. The trading system must never silently
+    fall back to the real wall-clock date during backtests or paper
+    simulations because that can introduce lookahead bias.
+    """
+    if simulated_date is None:
+        raise ValueError(
+            "run_tick requires simulated_date in backtest mode "
+            "to prevent lookahead risk."
+        )
+
+    # Establish the clock in the caller context as well.
+    # Worker threads also receive the date explicitly below.
+    set_simulated_date(simulated_date)
+
     states = await asyncio.gather(
         *(
             asyncio.to_thread(
@@ -292,6 +403,7 @@ async def run_tick(
                 ticker,
                 run_id,
                 index,
+                simulated_date,
             )
             for index, ticker in enumerate(tickers)
         )
@@ -338,11 +450,25 @@ async def run_tick(
 
         risk_proposed_shares = state.proposed_shares
 
+        # Capture the position BEFORE this tick can execute anything.
+        # This is essential for distinguishing:
+        #
+        #   no position -> zero shares
+        #
+        # from:
+        #
+        #   existing position -> SELL -> zero shares -> CLOSED
+        previous_shares = _current_position_shares(state.ticker)
+
         if state.risk_decision != RiskDecision.APPROVED:
             nodes.hold_node(state)
 
             position_metadata = _position_metadata(
                 state.ticker,
+                previous_shares=previous_shares,
+                execution_attempted=False,
+                execution_success=None,
+                execution_side=None,
             )
 
             trace = _build_trade_trace(
@@ -355,6 +481,7 @@ async def run_tick(
                 execution_success=None,
                 remaining_shares=position_metadata["remaining_shares"],
                 position_closed=position_metadata["position_closed"],
+                position_state=position_metadata["position_state"],
                 coordinator_approved=None,
                 coordinator_shares=None,
                 coordinator_notes=[],
@@ -419,10 +546,16 @@ async def run_tick(
                 "accounting",
             )
 
-            accounting_metadata = _accounting_metadata(accounting)
+            accounting_metadata = _accounting_metadata(
+                accounting,
+            )
 
             position_metadata = _position_metadata(
                 state.ticker,
+                previous_shares=previous_shares,
+                execution_attempted=True,
+                execution_success=execution_success,
+                execution_side=execution_side,
             )
 
             telemetry = _decision_metadata(state)
@@ -445,6 +578,7 @@ async def run_tick(
                 accounting=accounting,
                 remaining_shares=position_metadata["remaining_shares"],
                 position_closed=position_metadata["position_closed"],
+                position_state=position_metadata["position_state"],
                 coordinator_approved=True,
                 coordinator_shares=decision.shares,
                 coordinator_notes=list(decision.notes),
@@ -499,6 +633,10 @@ async def run_tick(
 
             position_metadata = _position_metadata(
                 state.ticker,
+                previous_shares=previous_shares,
+                execution_attempted=False,
+                execution_success=None,
+                execution_side=None,
             )
 
             telemetry = _decision_metadata(state)
@@ -513,6 +651,7 @@ async def run_tick(
                 execution_success=None,
                 remaining_shares=position_metadata["remaining_shares"],
                 position_closed=position_metadata["position_closed"],
+                position_state=position_metadata["position_state"],
                 coordinator_approved=False,
                 coordinator_shares=(decision.shares if decision is not None else None),
                 coordinator_notes=(

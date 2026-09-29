@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -69,6 +70,23 @@ class BacktestResult:
     final_equity: float = 0.0
     final_cash: float = 0.0
     final_realized_pnl: float = 0.0
+
+
+def _resolve_run_id(run_id: str) -> str:
+    """
+    Resolve the requested run ID into a canonical unique run ID.
+
+    Explicit run IDs are preserved so callers can reproduce or query
+    named experiments. The convenience value ``latest`` is replaced
+    with a fresh unique identifier to prevent SQLite primary-key
+    collisions across repeated backtest executions.
+    """
+    run_id = run_id.strip()
+
+    if run_id != "latest":
+        return run_id
+
+    return f"backtest_{datetime.now(UTC):%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}"
 
 
 def _price_lookup_factory(
@@ -408,6 +426,7 @@ def _build_execution_event(
         "realized_pnl": tick_result.realized_pnl,
         "remaining_shares": tick_result.remaining_shares,
         "position_closed": tick_result.position_closed,
+        "position_state": tick_result.position_state,
         "news_availability": tick_result.news_availability,
         "news_article_count": tick_result.news_article_count,
         "news_source": tick_result.news_source,
@@ -597,7 +616,7 @@ def run_backtest(
     if not tickers:
         raise ValueError("At least one non-empty ticker is required.")
 
-    run_id = run_id.strip()
+    run_id = _resolve_run_id(run_id)
 
     start = _parse_backtest_datetime(start_date)
     end = _parse_backtest_datetime(end_date)
@@ -622,6 +641,7 @@ def run_backtest(
     logger.info("Historical sessions found: %d", len(sessions))
     logger.info("First session: %s", sessions[0].date().isoformat())
     logger.info("Last session: %s", sessions[-1].date().isoformat())
+    logger.info("Canonical backtest run ID: %s", run_id)
 
     saved_config = nodes_module._risk_config_singleton
     saved_ledger = nodes_module._ledger_singleton
@@ -711,15 +731,16 @@ def run_backtest(
                         "proposed_shares": tick_result.proposed_shares,
                         "risk_decision": tick_result.risk_decision,
                         "risk_notes": tick_result.risk_notes or [],
-                        "execution_attempted": (tick_result.execution_attempted),
-                        "execution_success": (tick_result.execution_success),
+                        "execution_attempted": tick_result.execution_attempted,
+                        "execution_success": tick_result.execution_success,
                         "execution_side": tick_result.execution_side,
                         "average_cost": tick_result.average_cost,
                         "realized_pnl": tick_result.realized_pnl,
                         "remaining_shares": tick_result.remaining_shares,
                         "position_closed": tick_result.position_closed,
-                        "news_availability": (tick_result.news_availability),
-                        "news_article_count": (tick_result.news_article_count),
+                        "position_state": tick_result.position_state,
+                        "news_availability": tick_result.news_availability,
+                        "news_article_count": tick_result.news_article_count,
                         "news_source": tick_result.news_source,
                         "news_as_of": tick_result.news_as_of,
                     }
@@ -888,7 +909,10 @@ def main() -> None:
     parser.add_argument(
         "--run-id",
         default="latest",
-        help="Unique ID used for the run and result JSON filename.",
+        help=(
+            "Run identifier. The default 'latest' generates a fresh unique "
+            "ID for each execution."
+        ),
     )
 
     parser.add_argument(
@@ -918,7 +942,8 @@ def main() -> None:
     results_dir = Path("backtest/results")
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = results_dir / f"{args.run_id}.json"
+    # Use the canonical resolved run ID, not args.run_id.
+    output_path = results_dir / f"{result.run_id}.json"
 
     output_path.write_text(
         json.dumps(

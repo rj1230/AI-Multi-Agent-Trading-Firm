@@ -45,6 +45,9 @@ class TickResult:
     shares: float
     price: float | None
 
+    # Observability only. This does not affect strategy or execution.
+    decision_reason: str | None = None
+
     signal_direction: str | None = None
     signal_confidence: float = 0.0
     merge_agreement: bool | None = None
@@ -74,6 +77,54 @@ class TickResult:
     news_as_of: str | None = None
 
     trade_trace: TradeTrace | None = None
+
+
+def _classify_local_risk_reason(
+    state: TradingState,
+) -> str:
+    """
+    Classify a local risk rejection for observability.
+
+    This function does NOT modify the risk decision. It only converts
+    existing deterministic risk telemetry into a stable reason label.
+
+    Precedence is intentional:
+
+        neutral signal
+        -> circuit breaker
+        -> concurrent-position limit
+        -> ticker capacity
+        -> sector capacity
+        -> zero executable sizing
+        -> generic risk rejection
+    """
+    notes = state.risk_notes or []
+
+    # Neutral signals are a no-trade decision, not a capacity failure.
+    if any("Merged signal is neutral" in note for note in notes):
+        return "neutral_signal"
+
+    # A tripped circuit breaker is an explicit local risk rejection.
+    if any("Circuit breaker:" in note and "HALTED" in note for note in notes):
+        return "circuit_breaker"
+
+    # Concurrent-position limit.
+    if any("Concurrent positions:" in note and "BREACH" in note for note in notes):
+        return "concurrent_position_limit"
+
+    # Per-ticker capacity.
+    if any("Per-ticker cap" in note and "BREACH" in note for note in notes):
+        return "ticker_capacity"
+
+    # Per-sector capacity.
+    if any("Per-sector cap" in note and "BREACH" in note for note in notes):
+        return "sector_capacity"
+
+    # Explicit zero-room rejection emitted by RiskAgent.
+    if any("No cap room remains" in note for note in notes):
+        return "risk_sizing_zero"
+
+    return "risk_rejected"
 
 
 def _apply(
@@ -289,6 +340,7 @@ def _build_trade_trace(
     run_id: str,
     simulated_date: datetime | None,
     outcome: str,
+    decision_reason: str | None = None,
     risk_proposed_shares: float,
     execution_attempted: bool,
     execution_success: bool | None,
@@ -364,6 +416,7 @@ def _build_trade_trace(
         accounting=accounting_trace,
         metadata={
             "outcome": outcome,
+            "decision_reason": decision_reason,
             "tick_id": state.tick_id,
             "sector": state.sector,
             "atr": state.atr,
@@ -451,17 +504,12 @@ async def run_tick(
         risk_proposed_shares = state.proposed_shares
 
         # Capture the position BEFORE this tick can execute anything.
-        # This is essential for distinguishing:
-        #
-        #   no position -> zero shares
-        #
-        # from:
-        #
-        #   existing position -> SELL -> zero shares -> CLOSED
         previous_shares = _current_position_shares(state.ticker)
 
         if state.risk_decision != RiskDecision.APPROVED:
             nodes.hold_node(state)
+
+            decision_reason = _classify_local_risk_reason(state)
 
             position_metadata = _position_metadata(
                 state.ticker,
@@ -476,6 +524,7 @@ async def run_tick(
                 run_id=run_id,
                 simulated_date=simulated_date,
                 outcome="held_local_reject",
+                decision_reason=decision_reason,
                 risk_proposed_shares=risk_proposed_shares,
                 execution_attempted=False,
                 execution_success=None,
@@ -492,6 +541,7 @@ async def run_tick(
                 notes=("; ".join(state.risk_notes) or "held"),
                 shares=0.0,
                 price=state.entry_price,
+                decision_reason=decision_reason,
                 **telemetry,
                 execution_attempted=False,
                 execution_success=None,
@@ -567,6 +617,9 @@ async def run_tick(
                 run_id=run_id,
                 simulated_date=simulated_date,
                 outcome=outcome,
+                decision_reason=(
+                    "executed" if execution_success else "execution_failure"
+                ),
                 risk_proposed_shares=risk_proposed_shares,
                 execution_attempted=True,
                 execution_success=execution_success,
@@ -590,6 +643,7 @@ async def run_tick(
                     notes=execution_notes,
                     shares=decision.shares,
                     price=state.entry_price,
+                    decision_reason="executed",
                     **telemetry,
                     execution_attempted=True,
                     execution_success=True,
@@ -609,6 +663,7 @@ async def run_tick(
                     ),
                     shares=0.0,
                     price=state.entry_price,
+                    decision_reason="execution_failure",
                     **telemetry,
                     execution_attempted=True,
                     execution_success=False,
@@ -646,6 +701,7 @@ async def run_tick(
                 run_id=run_id,
                 simulated_date=simulated_date,
                 outcome="held_book_reject",
+                decision_reason="book_risk",
                 risk_proposed_shares=risk_proposed_shares,
                 execution_attempted=False,
                 execution_success=None,
@@ -664,6 +720,7 @@ async def run_tick(
                 notes=("; ".join(book_notes) or "held at book level"),
                 shares=0.0,
                 price=state.entry_price,
+                decision_reason="book_risk",
                 **telemetry,
                 execution_attempted=False,
                 execution_success=None,

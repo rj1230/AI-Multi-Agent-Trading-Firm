@@ -210,6 +210,10 @@ def outcome_label(
         "held_local_reject": "LOCAL RISK BLOCK",
         "held_book_reject": "BOOK RISK BLOCK",
         "held_execution_reject": "BROKER EXECUTION FAILED",
+        "neutral_signal": "NEUTRAL SIGNAL",
+        "ticker_capacity": "TICKER CAPACITY BLOCK",
+        "sector_capacity": "SECTOR CAPACITY BLOCK",
+        "book_risk": "BOOK RISK BLOCK",
     }.get(
         outcome or "",
         str(outcome or "UNKNOWN").upper(),
@@ -228,6 +232,9 @@ def outcome_class(
     if outcome in {
         "held_local_reject",
         "held_book_reject",
+        "ticker_capacity",
+        "sector_capacity",
+        "book_risk",
     }:
         return "warning"
 
@@ -524,6 +531,14 @@ footer {
     grid-template-columns: repeat(6, 1fr);
     gap: 8px;
     margin: 10px 0 20px;
+}
+
+.kpi-grid.five {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+.kpi-grid.four {
+    grid-template-columns: repeat(4, 1fr);
 }
 
 .kpi {
@@ -998,6 +1013,14 @@ section[data-testid="stSidebar"] button {
 
     .kpi-grid {
         grid-template-columns: repeat(3, 1fr);
+    }
+
+    .kpi-grid.five {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .kpi-grid.four {
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
@@ -1692,6 +1715,150 @@ def extract_news_quality(run_data):
 
 
 # ============================================================
+# BACKTEST TELEMETRY (presentation-only)
+# ============================================================
+
+DECISION_REASONS = [
+    ("executed", "Executed", "green"),
+    ("neutral_signal", "Neutral signal", ""),
+    ("ticker_capacity", "Ticker capacity", "yellow"),
+    ("sector_capacity", "Sector capacity", "yellow"),
+    ("book_risk", "Book risk", "yellow"),
+]
+
+DECISION_REASON_LABELS = {key: label for key, label, _ in DECISION_REASONS}
+
+
+def extract_decision_reasons(run_data: dict) -> dict:
+    """
+    Read decision-reason counts from the backtest JSON.
+
+    Looks for a pre-aggregated dict first (diagnostics or top level),
+    then falls back to counting a per-tick reason field. Purely
+    diagnostic: it never feeds back into strategy behavior.
+    """
+    diagnostics = run_data.get("diagnostics") or {}
+
+    for key in ("decision_reasons", "decision_reason_counts"):
+        for source in (diagnostics, run_data):
+            value = source.get(key)
+
+            if isinstance(value, dict) and value:
+                return {str(k): int(v or 0) for k, v in value.items()}
+
+    counts: dict = {}
+
+    for entry in run_data.get("tick_log") or []:
+        reason = first_value(
+            entry,
+            "decision_reason",
+            "reason_category",
+            "decision_category",
+        )
+
+        if reason:
+            counts[str(reason)] = counts.get(str(reason), 0) + 1
+
+    return counts
+
+
+def render_decision_reasons(reasons: dict, total_ticks: int) -> None:
+    if not reasons:
+        st.info(
+            "This run has no decision-reason telemetry. "
+            "Re-run the backtest with the latest runner."
+        )
+        return
+
+    known = [key for key, _, _ in DECISION_REASONS]
+
+    ordered = [k for k in known if k in reasons] + [
+        k for k in reasons if k not in known
+    ]
+
+    reason_total = sum(reasons.values())
+    denominator = reason_total or 1
+
+    color_by_key = {key: color for key, _, color in DECISION_REASONS}
+
+    display_html(
+        '<div class="kpi-grid five">'
+        + "".join(
+            f"""
+            <div class="kpi">
+                <div class="label">{
+                esc(DECISION_REASON_LABELS.get(k, k.replace("_", " ").title()))
+            }</div>
+                <div class="value {color_by_key.get(k, "")}">{esc(reasons[k])}</div>
+            </div>
+            """
+            for k in ordered
+        )
+        + "</div>"
+    )
+
+    st.dataframe(
+        [
+            {
+                "Reason": DECISION_REASON_LABELS.get(k, k.replace("_", " ").title()),
+                "Count": reasons[k],
+                "Share": reasons[k] / denominator,
+            }
+            for k in ordered
+        ]
+        + [
+            {
+                "Reason": "Total",
+                "Count": reason_total,
+                "Share": 1.0,
+            }
+        ],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Share": st.column_config.ProgressColumn(
+                "Share",
+                min_value=0.0,
+                max_value=1.0,
+                format="percent",
+            ),
+        },
+    )
+
+    if total_ticks and reason_total != total_ticks:
+        st.warning(
+            f"Reason counts sum to {reason_total}, but the run has "
+            f"{total_ticks} ticks. Some ticks are missing a decision reason."
+        )
+
+
+def trace_coverage(run_data: dict, run_stem: str) -> dict:
+    """Ticks in the result JSON vs TradeTraces persisted in SQLite."""
+    tick_log = run_data.get("tick_log") or []
+
+    ticks = len(tick_log)
+
+    tickers = len({x.get("ticker") for x in tick_log if x.get("ticker")})
+
+    traces = None
+
+    if AUDIT_DB_PATH.exists() and audit_table_exists("trade_traces"):
+        audit = load_audit_run(str(AUDIT_DB_PATH), run_stem)
+
+        if audit:
+            traces = len(audit["traces"])
+
+    coverage = (traces / ticks) if (traces is not None and ticks) else None
+
+    return {
+        "ticks": ticks,
+        "traces": traces,
+        "coverage": coverage,
+        "tickers": tickers,
+    }
+
+
+# ============================================================
 # PIPELINE
 # ============================================================
 
@@ -2236,6 +2403,10 @@ def render_decision_headline(outcome, notes):
         "held_local_reject": "HOLD — LOCAL RISK BLOCK",
         "held_book_reject": "HOLD — BOOK RISK BLOCK",
         "held_execution_reject": "HOLD — BROKER EXECUTION FAILED",
+        "neutral_signal": "HOLD — NEUTRAL SIGNAL",
+        "ticker_capacity": "HOLD — TICKER CAPACITY BLOCK",
+        "sector_capacity": "HOLD — SECTOR CAPACITY BLOCK",
+        "book_risk": "HOLD — BOOK RISK BLOCK",
     }.get(
         outcome or "",
         outcome_label(outcome),
@@ -3282,20 +3453,88 @@ with tab_backtest:
                 + "</div>"
             )
 
-            st.markdown("#### Trading pipeline telemetry")
+            tick_log = run_data.get(
+                "tick_log",
+                [],
+            )
 
-            telemetry = [
+            # ------------------------------------------------
+            # DECISION OUTCOMES
+            # ------------------------------------------------
+
+            st.markdown("#### Decision outcomes")
+
+            st.caption(
+                "Why each tick ended the way it did. Diagnostic telemetry "
+                "only; these counts do not influence strategy behavior."
+            )
+
+            render_decision_reasons(
+                extract_decision_reasons(run_data),
+                total_ticks=len(tick_log),
+            )
+
+            # ------------------------------------------------
+            # EXECUTION
+            # ------------------------------------------------
+
+            st.markdown("#### Execution")
+
+            execution_attempts = diagnostics.get(
+                "execution_attempts",
+                0,
+            )
+
+            execution_failures = diagnostics.get(
+                "execution_failures",
+                0,
+            )
+
+            execution_successes = diagnostics.get(
+                "execution_successes",
+                max(
+                    (execution_attempts or 0) - (execution_failures or 0),
+                    0,
+                ),
+            )
+
+            closed_trades_raw = run_data.get(
+                "closed_trades",
+                [],
+            )
+
+            # closed_trades may be stored as a list of round-trips or
+            # as a pre-computed integer count, depending on runner version.
+            if isinstance(closed_trades_raw, (list, tuple, dict)):
+                closed_trades_count = len(closed_trades_raw)
+            else:
+                closed_trades_count = int(safe_float(closed_trades_raw) or 0)
+
+            exec_kpis = [
                 (
-                    "Ticks",
-                    diagnostics.get(
-                        "tick_count",
-                        len(
-                            run_data.get(
-                                "tick_log",
-                                [],
-                            )
-                        ),
-                    ),
+                    "Attempts",
+                    execution_attempts,
+                    "",
+                ),
+                (
+                    "Successful",
+                    execution_successes,
+                    "green" if execution_successes else "",
+                ),
+                (
+                    "Failures",
+                    execution_failures,
+                    "red" if execution_failures else "green",
+                ),
+                (
+                    "Execution events",
+                    len(trades),
+                    "",
+                ),
+                (
+                    "Closed round-trips",
+                    closed_trades_count,
+                    "",
                 ),
                 (
                     "Risk approvals",
@@ -3303,34 +3542,7 @@ with tab_backtest:
                         "risk_approvals",
                         0,
                     ),
-                ),
-                (
-                    "Local rejects",
-                    diagnostics.get(
-                        "local_rejections",
-                        0,
-                    ),
-                ),
-                (
-                    "Book rejects",
-                    diagnostics.get(
-                        "book_rejections",
-                        0,
-                    ),
-                ),
-                (
-                    "Execution attempts",
-                    diagnostics.get(
-                        "execution_attempts",
-                        0,
-                    ),
-                ),
-                (
-                    "Execution failures",
-                    diagnostics.get(
-                        "execution_failures",
-                        0,
-                    ),
+                    "",
                 ),
             ]
 
@@ -3342,41 +3554,110 @@ with tab_backtest:
                         <div class="label">
                             {esc(label)}
                         </div>
-                        <div class="value">
+                        <div class="value {cls}">
                             {esc(value)}
                         </div>
                     </div>
                     """
-                    for label, value in telemetry
+                    for label, value, cls in exec_kpis
                 )
                 + "</div>"
             )
 
-            tick_log = run_data.get(
-                "tick_log",
-                [],
+            st.caption(
+                "Execution events are individual fills (including partial "
+                "sells). Closed round-trips only count positions that were "
+                "fully closed, so the two numbers can legitimately differ."
             )
 
-            outcome_counts = {}
+            # ------------------------------------------------
+            # TRACE COVERAGE
+            # ------------------------------------------------
 
-            for entry in tick_log:
-                outcome = entry.get(
-                    "outcome",
-                    "unknown",
+            st.markdown("#### Trace coverage")
+
+            coverage_info = trace_coverage(
+                run_data,
+                Path(selected_run).stem,
+            )
+
+            coverage_value = coverage_info["coverage"]
+
+            coverage_kpis = [
+                (
+                    "Ticks",
+                    coverage_info["ticks"],
+                    "",
+                ),
+                (
+                    "TradeTraces",
+                    (
+                        coverage_info["traces"]
+                        if coverage_info["traces"] is not None
+                        else "—"
+                    ),
+                    "",
+                ),
+                (
+                    "Coverage",
+                    (f"{coverage_value:.0%}" if coverage_value is not None else "—"),
+                    (
+                        "green"
+                        if coverage_value == 1
+                        else "yellow"
+                        if coverage_value is not None
+                        else ""
+                    ),
+                ),
+                (
+                    "Tickers",
+                    coverage_info["tickers"],
+                    "",
+                ),
+            ]
+
+            display_html(
+                '<div class="kpi-grid four">'
+                + "".join(
+                    f"""
+                    <div class="kpi">
+                        <div class="label">
+                            {esc(label)}
+                        </div>
+                        <div class="value {cls}">
+                            {esc(value)}
+                        </div>
+                    </div>
+                    """
+                    for label, value, cls in coverage_kpis
+                )
+                + "</div>"
+            )
+
+            if coverage_info["traces"] is None:
+                st.caption(
+                    "TradeTraces not found in the SQLite audit DB for this "
+                    "run (the run may predate persistence)."
                 )
 
-                outcome_counts[outcome] = (
-                    outcome_counts.get(
-                        outcome,
-                        0,
+            with st.expander("Raw outcome counts (per tick)"):
+                raw_outcome_counts = {}
+
+                for entry in tick_log:
+                    outcome_key = outcome_label(entry.get("outcome"))
+
+                    raw_outcome_counts[outcome_key] = (
+                        raw_outcome_counts.get(
+                            outcome_key,
+                            0,
+                        )
+                        + 1
                     )
-                    + 1
-                )
 
-            if outcome_counts:
-                st.markdown("#### Decision outcomes")
-
-                st.bar_chart(outcome_counts)
+                if raw_outcome_counts:
+                    st.bar_chart(raw_outcome_counts)
+                else:
+                    st.caption("No tick telemetry recorded.")
 
             equity_curve = run_data.get(
                 "equity_curve",

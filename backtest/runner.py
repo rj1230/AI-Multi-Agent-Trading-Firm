@@ -340,7 +340,15 @@ def _finalize_news_status(result: BacktestResult) -> None:
 
 def _build_diagnostics(result: BacktestResult) -> dict[str, Any]:
     """Build observational run-level orchestration diagnostics."""
-    outcome_counts = Counter(tick.get("outcome") for tick in result.tick_log)
+    outcome_counts = Counter(
+        tick.get("outcome") for tick in result.tick_log if tick.get("outcome")
+    )
+
+    decision_reason_counts = Counter(
+        tick.get("decision_reason")
+        for tick in result.tick_log
+        if tick.get("decision_reason")
+    )
 
     execution_attempts = sum(
         bool(tick.get("execution_attempted")) for tick in result.tick_log
@@ -387,6 +395,7 @@ def _build_diagnostics(result: BacktestResult) -> dict[str, Any]:
         "trade_trace_tickers": trace_tickers,
         "trace_coverage_complete": trace_count == len(result.tick_log),
         "outcome_counts": dict(outcome_counts),
+        "decision_reason_counts": dict(decision_reason_counts),
         "risk_approvals": risk_approvals,
         "local_rejections": local_rejections,
         "coordinator_approvals": coordinator_approvals,
@@ -719,6 +728,7 @@ def run_backtest(
                         "date": current.date().isoformat(),
                         "ticker": ticker,
                         "outcome": tick_result.outcome,
+                        "decision_reason": tick_result.decision_reason,
                         "notes": tick_result.notes,
                         "shares": tick_result.shares,
                         "price": tick_result.price,

@@ -1,50 +1,7 @@
-"""
-AI Multi-Agent Trading Firm · Command Center
-
-Purpose
--------
-Interactive Streamlit console for understanding and monitoring the
-multi-agent trading system.
-
-The UI is observational. It does not change trading strategy logic.
-
-Architecture
-
-    NewsAgent ───────┐
-                     │
-    ChartAgent ──────┤
-                     ▼
-               SignalMerger
-                     │
-                     ▼
-                 RiskAgent
-                     │
-                     ▼
-          PortfolioRiskCoordinator
-                /           \
-               /             \
-        APPROVED             REJECTED
-           │                    │
-           ▼                    ▼
-    ExecutionAgent           HoldNode
-           │
-           ▼
-       Broker / Fill
-
-Persistence
-
-    Backtest
-        │
-        ├── JSON result ───────► Backtest Lab
-        │
-        └── SQLite audit ─────► Run Audit
-                                   │
-                                   ├── runs
-                                   └── trade_traces
-"""
-
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import html
 import json
 import os
@@ -53,6 +10,8 @@ import sys
 import time
 import uuid
 from contextlib import nullcontext
+from datetime import UTC, date, datetime
+from datetime import time as datetime_time
 from pathlib import Path
 
 import streamlit as st
@@ -108,11 +67,12 @@ try:
         logfire.configure(token=token)
         LOGFIRE_OK = True
 
-except Exception:  # noqa: S110,BLE001
-    pass
+except Exception:  # noqa: BLE001
+    LOGFIRE_OK = False
 
 
 def trace_context():
+    """Return Logfire span context when telemetry is configured."""
     if LOGFIRE_OK:
         return logfire.span("Trading Command Center operation")
 
@@ -137,11 +97,7 @@ st.set_page_config(
 
 
 def display_html(markup: str) -> None:
-    native = getattr(
-        st,
-        "html",
-        None,
-    )
+    native = getattr(st, "html", None)
 
     if callable(native):
         native(markup)
@@ -165,10 +121,7 @@ def fmt_money(
 ) -> str:
     try:
         return f"${float(value):,.2f}"
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return default
 
 
@@ -181,10 +134,7 @@ def fmt_pct(
 
     try:
         return f"{float(value):+.2%}"
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return default
 
 
@@ -198,10 +148,7 @@ def fmt_num(
 
     try:
         return f"{float(value):.{decimals}f}"
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return default
 
 
@@ -211,21 +158,48 @@ def fmt_shares(
 ) -> str:
     try:
         return f"{float(value):.3f}"
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return default
 
 
 def safe_float(value):
     try:
         return float(value)
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         return None
+
+
+def parse_json_value(
+    value,
+    default=None,
+):
+    if value is None:
+        return default
+
+    if isinstance(value, (dict, list)):
+        return value
+
+    if not isinstance(value, str):
+        return value
+
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def first_value(
+    data: dict,
+    *keys,
+    default=None,
+):
+    for key in keys:
+        value = data.get(key)
+
+        if value is not None:
+            return value
+
+    return default
 
 
 def outcome_label(
@@ -272,18 +246,127 @@ def direction_class(
     return "neutral"
 
 
-def first_value(
-    data: dict,
-    *keys,
-    default=None,
-):
-    for key in keys:
-        value = data.get(key)
+def serialize_object(value):
+    """
+    Convert dataclasses and nested objects into something Streamlit
+    can display safely.
 
-        if value is not None:
+    This is presentation-only. It does not modify the underlying
+    TradeTrace or runtime objects.
+    """
+    if value is None:
+        return None
+
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+
+    if isinstance(value, dict):
+        return {str(key): serialize_object(item) for key, item in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [serialize_object(item) for item in value]
+
+    if hasattr(value, "value"):
+        try:
+            return value.value
+        except Exception:  # noqa: BLE001
             return value
 
-    return default
+    if hasattr(value, "__dict__"):
+        try:
+            return {
+                str(key): serialize_object(item) for key, item in vars(value).items()
+            }
+        except Exception:  # noqa: BLE001
+            return str(value)
+
+    return value
+
+
+def result_to_dict(result):
+    """Normalize TickResult for display and session-state inspection."""
+    return serialize_object(result)
+
+
+# ============================================================
+# AGENTIC PAPER TRADE
+# ============================================================
+
+
+def run_agentic_paper_trade(
+    ticker: str,
+    simulated_date: date,
+):
+    """
+    Run one ticker through the real top-level trading orchestrator.
+
+    The UI intentionally calls run_tick() instead of directly invoking
+    ExecutionAgent or SimBroker. This keeps the recruiter/demo path
+    identical to the production orchestration path.
+    """
+    from orchestrator.tick_runner import run_tick
+
+    run_id = f"ui_{ticker}_{simulated_date.isoformat()}_{uuid.uuid4().hex[:8]}"
+
+    simulated_datetime = datetime.combine(
+        simulated_date,
+        datetime_time.min,
+    )
+
+    with trace_context():
+        results = asyncio.run(
+            run_tick(
+                [ticker],
+                run_id=run_id,
+                simulated_date=simulated_datetime,
+            )
+        )
+
+    result = results.get(ticker)
+
+    if result is None:
+        raise RuntimeError(f"run_tick() completed but returned no result for {ticker}.")
+
+    return run_id, result
+
+
+def paper_trade_result_summary(result):
+    """Extract presentation fields from TickResult."""
+    return {
+        "outcome": getattr(result, "outcome", None),
+        "notes": getattr(result, "notes", ""),
+        "shares": getattr(result, "shares", None),
+        "price": getattr(result, "price", None),
+        "signal_direction": getattr(result, "signal_direction", None),
+        "signal_confidence": getattr(result, "signal_confidence", None),
+        "merge_agreement": getattr(result, "merge_agreement", None),
+        "atr": getattr(result, "atr", None),
+        "entry_price": getattr(result, "entry_price", None),
+        "sector": getattr(result, "sector", None),
+        "proposed_shares": getattr(result, "proposed_shares", None),
+        "risk_decision": getattr(result, "risk_decision", None),
+        "risk_notes": getattr(result, "risk_notes", None) or [],
+        "execution_attempted": getattr(result, "execution_attempted", False),
+        "execution_success": getattr(result, "execution_success", None),
+        "execution_side": getattr(result, "execution_side", None),
+        "average_cost": getattr(result, "average_cost", None),
+        "realized_pnl": getattr(result, "realized_pnl", None),
+        "remaining_shares": getattr(result, "remaining_shares", None),
+        "position_closed": getattr(result, "position_closed", False),
+        "news_availability": getattr(result, "news_availability", None),
+        "news_article_count": getattr(result, "news_article_count", 0),
+        "news_source": getattr(result, "news_source", None),
+        "news_direction": getattr(result, "news_direction", None),
+        "news_confidence": getattr(result, "news_confidence", None),
+        "news_as_of": getattr(result, "news_as_of", None),
+        "chart_direction": getattr(result, "chart_direction", None),
+        "chart_confidence": getattr(result, "chart_confidence", None),
+        "coordinator_approved": getattr(
+            result,
+            "coordinator_approved",
+            getattr(result, "outcome", None) == "executed",
+        ),
+    }
 
 
 # ============================================================
@@ -340,10 +423,6 @@ footer {
     visibility: hidden;
 }
 
-/* ---------------------------------------------------------
-   HERO
---------------------------------------------------------- */
-
 .hero {
     padding: 8px 0 18px;
 }
@@ -390,10 +469,6 @@ footer {
     border-radius: 50%;
     background: var(--green);
 }
-
-/* ---------------------------------------------------------
-   ARCHITECTURE
---------------------------------------------------------- */
 
 .arch-grid {
     display: grid;
@@ -444,20 +519,6 @@ footer {
     font-size: 9px;
 }
 
-@media (max-width: 1100px) {
-    .arch-grid {
-        grid-template-columns: repeat(4, 1fr);
-    }
-
-    .arch-node::after {
-        display: none;
-    }
-}
-
-/* ---------------------------------------------------------
-   KPI
---------------------------------------------------------- */
-
 .kpi-grid {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -499,16 +560,6 @@ footer {
 .kpi .value.yellow {
     color: var(--yellow);
 }
-
-@media (max-width: 1100px) {
-    .kpi-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-/* ---------------------------------------------------------
-   AGENT CARDS
---------------------------------------------------------- */
 
 .agent-grid {
     display: grid;
@@ -557,10 +608,6 @@ footer {
 .neutral {
     color: var(--muted);
 }
-
-/* ---------------------------------------------------------
-   DECISION CARD
---------------------------------------------------------- */
 
 .decision-card {
     padding: 16px;
@@ -630,10 +677,6 @@ footer {
     background: var(--panel2);
 }
 
-/* ---------------------------------------------------------
-   PIPELINE
---------------------------------------------------------- */
-
 .pipeline {
     display: flex;
     align-items: stretch;
@@ -655,6 +698,22 @@ footer {
     background: var(--accent-soft);
 }
 
+.pipeline-step.state-pass {
+    border-color: var(--green);
+    background: var(--green-soft);
+}
+
+.pipeline-step.state-block {
+    border-color: var(--red);
+    background: var(--red-soft);
+}
+
+.pipeline-step.state-skip {
+    border-color: var(--border);
+    background: var(--panel2);
+    opacity: .55;
+}
+
 .pipeline-step .index {
     color: var(--accent);
     font-family: monospace;
@@ -674,20 +733,6 @@ footer {
     font-size: 8px;
 }
 
-@media (max-width: 900px) {
-    .pipeline {
-        overflow-x: auto;
-    }
-
-    .pipeline-step {
-        min-width: 125px;
-    }
-}
-
-/* ---------------------------------------------------------
-   EXPLANATION
---------------------------------------------------------- */
-
 .reason-box {
     padding: 11px 13px;
     margin-top: 8px;
@@ -703,9 +748,209 @@ footer {
     color: var(--text);
 }
 
-/* ---------------------------------------------------------
-   SIDEBAR
---------------------------------------------------------- */
+.decision-headline {
+    padding: 18px 20px;
+    margin: 14px 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+}
+
+.decision-headline.success {
+    border-left: 4px solid var(--green);
+}
+
+.decision-headline.warning {
+    border-left: 4px solid var(--yellow);
+}
+
+.decision-headline.danger {
+    border-left: 4px solid var(--red);
+}
+
+.decision-headline-label {
+    color: var(--muted2);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.decision-headline-title {
+    margin-top: 6px;
+    font-family: monospace;
+    font-size: 22px;
+    font-weight: 800;
+}
+
+.decision-headline-text {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.lineage-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px 18px;
+    margin: 4px 0 16px;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.lineage-item .symbol {
+    font-weight: 800;
+    margin-right: 3px;
+}
+
+.lineage-item.success {
+    color: var(--green);
+}
+
+.lineage-item.danger {
+    color: var(--red);
+}
+
+.lineage-item.neutral {
+    color: var(--muted2);
+}
+
+.risk-matrix {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.risk-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel2);
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.risk-check .symbol {
+    font-weight: 800;
+}
+
+.risk-check.success {
+    border-color: var(--green);
+    color: var(--green);
+}
+
+.risk-check.danger {
+    border-color: var(--red);
+    color: var(--red);
+}
+
+.risk-check.neutral {
+    color: var(--muted);
+}
+
+.temporal-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.temporal-item {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel2);
+}
+
+.temporal-item .label {
+    color: var(--muted2);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+
+.temporal-item .value {
+    margin-top: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text);
+}
+
+.demo-banner {
+    padding: 14px 16px;
+    margin: 10px 0 16px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    background: var(--accent-soft);
+}
+
+.demo-banner-title {
+    color: var(--accent);
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .05em;
+}
+
+.demo-banner-text {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.55;
+}
+
+.paper-stage {
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+}
+
+.paper-stage .stage-number {
+    color: var(--accent);
+    font-family: monospace;
+    font-size: 10px;
+}
+
+.paper-stage .stage-title {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 750;
+}
+
+.paper-stage .stage-description {
+    margin-top: 4px;
+    color: var(--muted2);
+    font-size: 10px;
+}
+
+.accounting-highlight {
+    padding: 15px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+}
+
+.accounting-highlight .title {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+
+.accounting-highlight .value {
+    margin-top: 6px;
+    font-family: monospace;
+    font-size: 19px;
+    font-weight: 800;
+}
 
 section[data-testid="stSidebar"] {
     background: #10141a;
@@ -715,10 +960,6 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] button {
     border-color: var(--border) !important;
 }
-
-/* ---------------------------------------------------------
-   SECTION
---------------------------------------------------------- */
 
 .section-title {
     margin-top: 18px;
@@ -734,6 +975,50 @@ section[data-testid="stSidebar"] button {
     font-size: 11px;
 }
 
+.audit-ok {
+    color: var(--green);
+}
+
+.audit-warning {
+    color: var(--yellow);
+}
+
+.audit-danger {
+    color: var(--red);
+}
+
+@media (max-width: 1100px) {
+    .arch-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+
+    .arch-node::after {
+        display: none;
+    }
+
+    .kpi-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 900px) {
+    .pipeline {
+        overflow-x: auto;
+    }
+
+    .pipeline-step {
+        min-width: 125px;
+    }
+
+    .risk-matrix {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .temporal-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 </style>
 """
 
@@ -744,7 +1029,7 @@ st.markdown(
 
 
 # ============================================================
-# DATA LOADERS
+# JSON DATA LOADERS
 # ============================================================
 
 
@@ -767,11 +1052,7 @@ def load_json_file(
                 encoding="utf-8",
             )
         )
-
-    except (
-        json.JSONDecodeError,
-        OSError,
-    ):
+    except (json.JSONDecodeError, OSError):
         return None
 
 
@@ -797,16 +1078,12 @@ def list_backtest_runs(
 
 
 def load_ledger():
-    exists = LEDGER_PATH.exists()
-
-    if not exists:
+    if not LEDGER_PATH.exists():
         return None
-
-    mtime = LEDGER_PATH.stat().st_mtime
 
     return load_json_file(
         str(LEDGER_PATH),
-        mtime,
+        LEDGER_PATH.stat().st_mtime,
     )
 
 
@@ -825,29 +1102,40 @@ def load_run(
 
 
 # ============================================================
-# SQLITE AUDIT LOADERS
+# SQLITE AUDIT
 # ============================================================
+
+
+def _audit_connection():
+    """
+    Open the audit database read-only.
+
+    Streamlit must never mutate the persistent audit database.
+    """
+    if not AUDIT_DB_PATH.exists():
+        return None
+
+    try:
+        connection = sqlite3.connect(
+            f"file:{AUDIT_DB_PATH.resolve()}?mode=ro",
+            uri=True,
+        )
+        connection.row_factory = sqlite3.Row
+        return connection
+    except sqlite3.Error:
+        return None
 
 
 def _sqlite_rows(
     query: str,
     params=(),
 ):
-    """
-    Execute a read-only SQLite query against the persistent audit DB.
+    connection = _audit_connection()
 
-    The UI treats SQLite as an observational data source.
-    """
-    if not AUDIT_DB_PATH.exists():
+    if connection is None:
         return []
 
-    connection = None
-
     try:
-        connection = sqlite3.connect(AUDIT_DB_PATH)
-
-        connection.row_factory = sqlite3.Row
-
         rows = connection.execute(
             query,
             params,
@@ -859,8 +1147,63 @@ def _sqlite_rows(
         return []
 
     finally:
-        if connection is not None:
-            connection.close()
+        connection.close()
+
+
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def audit_table_exists(
+    table_name: str,
+) -> bool:
+    rows = _sqlite_rows(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = ?
+        LIMIT 1
+        """,
+        (table_name,),
+    )
+
+    return bool(rows)
+
+
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def audit_table_columns(
+    table_name: str,
+):
+    if not audit_table_exists(table_name):
+        return []
+
+    rows = _sqlite_rows(f"PRAGMA table_info({table_name})")
+
+    return [str(row["name"]) for row in rows if row.get("name")]
+
+
+def _safe_select_columns(
+    table_name: str,
+    preferred_columns: list[str],
+):
+    """
+    Select only columns that actually exist.
+
+    This prevents the UI from becoming coupled to one exact
+    storage schema revision.
+    """
+    available = set(audit_table_columns(table_name))
+
+    selected = [column for column in preferred_columns if column in available]
+
+    if not selected:
+        return None
+
+    return ", ".join(f'"{column}"' for column in selected)
 
 
 @st.cache_data(
@@ -870,33 +1213,34 @@ def _sqlite_rows(
 def list_audit_runs(
     db_path_str: str,
 ):
-    """
-    Return persisted run records.
-
-    The query intentionally selects the known run-audit fields instead
-    of depending on RunAuditStore's Python API.
-    """
-    db_path = Path(db_path_str)
-
-    if not db_path.exists():
+    if not Path(db_path_str).exists():
         return []
 
-    return _sqlite_rows(
-        """
-        SELECT
-            run_id,
-            status,
-            started_at,
-            finished_at,
-            start_date,
-            end_date,
-            tickers,
-            starting_equity,
-            final_equity,
-            realized_pnl,
-            benchmark_return,
-            trade_trace_count,
-            metadata
+    columns = _safe_select_columns(
+        "runs",
+        [
+            "run_id",
+            "status",
+            "started_at",
+            "finished_at",
+            "start_date",
+            "end_date",
+            "tickers",
+            "starting_equity",
+            "final_equity",
+            "realized_pnl",
+            "benchmark_return",
+            "trade_trace_count",
+            "metadata",
+        ],
+    )
+
+    if not columns:
+        return []
+
+    rows = _sqlite_rows(
+        f"""
+        SELECT {columns}
         FROM runs
         ORDER BY
             COALESCE(
@@ -905,6 +1249,8 @@ def list_audit_runs(
             ) DESC
         """
     )
+
+    return rows
 
 
 @st.cache_data(
@@ -915,17 +1261,34 @@ def load_audit_run(
     db_path_str: str,
     run_id: str,
 ):
-    """
-    Load one persisted run and all of its trade traces.
-    """
-    db_path = Path(db_path_str)
+    if not Path(db_path_str).exists():
+        return None
 
-    if not db_path.exists():
+    run_columns = _safe_select_columns(
+        "runs",
+        [
+            "run_id",
+            "status",
+            "started_at",
+            "finished_at",
+            "start_date",
+            "end_date",
+            "tickers",
+            "starting_equity",
+            "final_equity",
+            "realized_pnl",
+            "benchmark_return",
+            "trade_trace_count",
+            "metadata",
+        ],
+    )
+
+    if not run_columns:
         return None
 
     runs = _sqlite_rows(
-        """
-        SELECT *
+        f"""
+        SELECT {run_columns}
         FROM runs
         WHERE run_id = ?
         LIMIT 1
@@ -936,21 +1299,24 @@ def load_audit_run(
     if not runs:
         return None
 
-    traces = _sqlite_rows(
-        """
-        SELECT *
-        FROM trade_traces
-        WHERE run_id = ?
-        ORDER BY
-            COALESCE(
-                simulated_date,
-                created_at
-            ),
-            ticker,
-            id
-        """,
-        (run_id,),
-    )
+    traces = []
+
+    if audit_table_exists("trade_traces"):
+        traces = _sqlite_rows(
+            """
+            SELECT *
+            FROM trade_traces
+            WHERE run_id = ?
+            ORDER BY
+                COALESCE(
+                    simulated_date,
+                    created_at
+                ),
+                ticker,
+                id
+            """,
+            (run_id,),
+        )
 
     return {
         "run": runs[0],
@@ -958,84 +1324,86 @@ def load_audit_run(
     }
 
 
-def parse_json_value(
-    value,
-    default=None,
+@st.cache_data(
+    ttl=5,
+    show_spinner=False,
+)
+def audit_table_counts(
+    db_path_str: str,
 ):
-    if value is None:
-        return default
+    counts = {}
 
-    if isinstance(
-        value,
-        (
-            dict,
-            list,
-        ),
-    ):
-        return value
+    if not Path(db_path_str).exists():
+        return counts
 
-    if not isinstance(
-        value,
-        str,
-    ):
-        return value
+    for table in [
+        "runs",
+        "trade_traces",
+        "trades",
+        "agent_logs",
+        "portfolio_snapshots",
+    ]:
+        if not audit_table_exists(table):
+            continue
 
-    try:
-        return json.loads(value)
-    except (
-        json.JSONDecodeError,
-        TypeError,
-    ):
-        return default
+        rows = _sqlite_rows(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM {table}
+            """
+        )
+
+        counts[table] = rows[0]["count"] if rows else 0
+
+    return counts
+
+
+# ============================================================
+# AUDIT NORMALIZATION
+# ============================================================
 
 
 def normalize_audit_trace(
     trace: dict,
 ) -> dict:
     """
-    Normalize SQLite trade-trace columns into UI vocabulary.
+    Normalize persistent TradeTrace fields for the UI.
 
-    This keeps the dashboard tolerant of small storage naming differences
-    while preserving the canonical trace semantics.
+    Storage may evolve while the semantic TradeTrace contract
+    remains stable.
     """
+
     metadata = parse_json_value(
         trace.get("metadata"),
         {},
     )
 
-    if not isinstance(
-        metadata,
-        dict,
-    ):
+    if not isinstance(metadata, dict):
         metadata = {}
 
     risk_checks = parse_json_value(
-        trace.get("risk_checks"),
+        first_value(
+            trace,
+            "risk_checks",
+            "checks",
+            default=[],
+        ),
         [],
     )
 
-    if not isinstance(
-        risk_checks,
-        list,
-    ):
+    if not isinstance(risk_checks, list):
         risk_checks = []
 
-    risk_notes = parse_json_value(
-        trace.get("risk_notes"),
-        [],
+    outcome = first_value(
+        trace,
+        "outcome",
+        default=None,
     )
-
-    if not isinstance(
-        risk_notes,
-        list,
-    ):
-        risk_notes = []
 
     return {
         **trace,
         "metadata": metadata,
         "risk_checks": risk_checks,
-        "risk_notes": risk_notes,
         "ticker": first_value(
             trace,
             "ticker",
@@ -1052,45 +1420,53 @@ def normalize_audit_trace(
             "date",
             default="—",
         ),
-        "outcome": first_value(
-            trace,
-            "outcome",
-            default="unknown",
-        ),
+        "outcome": outcome or "unknown",
         "signal_direction": first_value(
             trace,
             "signal_direction",
+            "direction",
             default="neutral",
         ),
         "signal_confidence": first_value(
             trace,
             "signal_confidence",
-            default=None,
+            "confidence",
         ),
         "merge_agreement": first_value(
             trace,
             "merge_agreement",
-            default=None,
+            "agreement",
+        ),
+        "risk_approved": first_value(
+            trace,
+            "risk_approved",
+            "risk_decision",
         ),
         "risk_decision": first_value(
             trace,
             "risk_decision",
-            default=None,
+            "risk_approved",
+        ),
+        "raw_shares": first_value(
+            trace,
+            "raw_shares",
         ),
         "proposed_shares": first_value(
             trace,
             "proposed_shares",
-            default=None,
         ),
         "final_shares": first_value(
             trace,
             "final_shares",
-            default=None,
+            "coordinator_shares",
+        ),
+        "coordinator_approved": first_value(
+            trace,
+            "coordinator_approved",
         ),
         "execution_side": first_value(
             trace,
             "execution_side",
-            default=None,
         ),
         "execution_attempted": first_value(
             trace,
@@ -1100,27 +1476,36 @@ def normalize_audit_trace(
         "execution_success": first_value(
             trace,
             "execution_success",
-            default=None,
+        ),
+        "execution_quantity": first_value(
+            trace,
+            "execution_quantity",
+            "quantity",
+        ),
+        "execution_price": first_value(
+            trace,
+            "execution_price",
+            "price",
+        ),
+        "order_id": first_value(
+            trace,
+            "order_id",
         ),
         "average_cost": first_value(
             trace,
             "average_cost",
-            default=None,
         ),
         "realized_pnl": first_value(
             trace,
             "realized_pnl",
-            default=None,
         ),
         "remaining_shares": first_value(
             trace,
             "remaining_shares",
-            default=None,
         ),
         "position_closed": first_value(
             trace,
             "position_closed",
-            default=None,
         ),
     }
 
@@ -1133,17 +1518,11 @@ def parse_run_metadata(
         {},
     )
 
-    if isinstance(
-        metadata,
-        dict,
-    ):
-        return metadata
-
-    return {}
+    return metadata if isinstance(metadata, dict) else {}
 
 
 # ============================================================
-# LEDGER NORMALIZATION
+# LEDGER
 # ============================================================
 
 
@@ -1167,12 +1546,9 @@ def normalize_ledger(
 
         market_value = 0.0
 
-        for pos in positions.values():
-            if isinstance(
-                pos,
-                dict,
-            ):
-                market_value += safe_float(pos.get("market_value")) or 0.0
+        for position in positions.values():
+            if isinstance(position, dict):
+                market_value += safe_float(position.get("market_value")) or 0.0
 
         if cash is not None:
             equity = cash + market_value
@@ -1198,22 +1574,14 @@ NEWS_LABELS = {
 }
 
 
-def normalize_news_status(
-    value,
-):
+def normalize_news_status(value):
     if value is None:
         return None
 
-    if isinstance(
-        value,
-        dict,
-    ):
+    if isinstance(value, dict):
         value = value.get("availability")
 
-    if hasattr(
-        value,
-        "value",
-    ):
+    if hasattr(value, "value"):
         value = value.value
 
     value = str(value).lower().strip()
@@ -1221,9 +1589,7 @@ def normalize_news_status(
     return value if value in NEWS_LABELS else None
 
 
-def extract_news_quality(
-    run_data,
-):
+def extract_news_quality(run_data):
     raw = run_data.get("news_availability")
 
     result = {
@@ -1240,19 +1606,13 @@ def extract_news_quality(
 
     by_ticker = {}
 
-    if isinstance(
-        raw,
-        dict,
-    ):
+    if isinstance(raw, dict):
         candidate = raw.get("by_ticker")
 
         if candidate is None:
             candidate = raw.get("tickers")
 
-        if isinstance(
-            candidate,
-            dict,
-        ):
+        if isinstance(candidate, dict):
             for ticker, value in candidate.items():
                 status = normalize_news_status(value)
 
@@ -1283,27 +1643,18 @@ def extract_news_quality(
 
     result["by_ticker"] = by_ticker
 
-    result["available"] = sum(v == "available" for v in by_ticker.values())
+    result["available"] = sum(value == "available" for value in by_ticker.values())
 
-    result["unavailable"] = sum(v == "unavailable" for v in by_ticker.values())
+    result["unavailable"] = sum(value == "unavailable" for value in by_ticker.values())
 
-    result["error"] = sum(v == "error" for v in by_ticker.values())
+    result["error"] = sum(value == "error" for value in by_ticker.values())
 
     result["total"] = len(by_ticker)
 
-    if isinstance(
-        raw,
-        dict,
-    ):
+    if isinstance(raw, dict):
         summary = raw.get("summary")
 
-        if isinstance(
-            summary,
-            dict,
-        ):
-            source = summary
-        else:
-            source = raw
+        source = summary if isinstance(summary, dict) else raw
 
         for key in [
             "available",
@@ -1314,10 +1665,7 @@ def extract_news_quality(
             if key in source:
                 try:
                     result[key] = int(source[key] or 0)
-                except (
-                    TypeError,
-                    ValueError,
-                ):
+                except (TypeError, ValueError):
                     pass
 
         coverage = source.get("coverage")
@@ -1334,10 +1682,7 @@ def extract_news_quality(
 
                 result["coverage"] = coverage
 
-            except (
-                TypeError,
-                ValueError,
-            ):
+            except (TypeError, ValueError):
                 pass
 
     if result["coverage"] is None and result["total"] > 0:
@@ -1351,59 +1696,25 @@ def extract_news_quality(
 # ============================================================
 
 PIPELINE = [
-    (
-        "1",
-        "NewsAgent",
-        "Market/news",
-    ),
-    (
-        "2",
-        "ChartAgent",
-        "Technicals",
-    ),
-    (
-        "3",
-        "SignalMerger",
-        "Deterministic",
-    ),
-    (
-        "4",
-        "RiskAgent",
-        "Position sizing",
-    ),
-    (
-        "5",
-        "Portfolio",
-        "Book-level risk",
-    ),
-    (
-        "6",
-        "Execution",
-        "Broker / Hold",
-    ),
+    ("1", "NewsAgent", "Market/news"),
+    ("2", "ChartAgent", "Technicals"),
+    ("3", "SignalMerger", "Deterministic"),
+    ("4", "RiskAgent", "Position sizing"),
+    ("5", "Portfolio", "Book-level risk"),
+    ("6", "Execution", "Broker / Hold"),
 ]
 
 
 def render_architecture():
     nodes = []
 
-    for (
-        index,
-        name,
-        description,
-    ) in PIPELINE:
+    for index, name, description in PIPELINE:
         nodes.append(
             f"""
             <div class="arch-node">
-                <div class="number">
-                    {index}
-                </div>
-                <strong>
-                    {esc(name)}
-                </strong>
-                <small>
-                    {esc(description)}
-                </small>
+                <div class="number">{esc(index)}</div>
+                <strong>{esc(name)}</strong>
+                <small>{esc(description)}</small>
             </div>
             """
         )
@@ -1420,23 +1731,115 @@ def render_architecture():
 def render_pipeline():
     nodes = []
 
-    for (
-        index,
-        name,
-        description,
-    ) in PIPELINE:
+    for index, name, description in PIPELINE:
         nodes.append(
             f"""
             <div class="pipeline-step active">
-                <div class="index">
-                    {index}
-                </div>
-                <strong>
-                    {esc(name)}
-                </strong>
-                <small>
-                    {esc(description)}
-                </small>
+                <div class="index">{esc(index)}</div>
+                <strong>{esc(name)}</strong>
+                <small>{esc(description)}</small>
+            </div>
+            """
+        )
+
+    display_html(
+        f"""
+        <div class="pipeline">
+            {"".join(nodes)}
+        </div>
+        """
+    )
+
+
+def render_paper_trade_pipeline(
+    result,
+):
+    """
+    Render the actual agentic execution path.
+
+    The result object is used only for presentation. The UI does not
+    recompute strategy decisions.
+    """
+
+    outcome = getattr(
+        result,
+        "outcome",
+        None,
+    )
+
+    execution_success = getattr(
+        result,
+        "execution_success",
+        None,
+    )
+
+    coordinator_approved = outcome == "executed"
+
+    # Each stage carries a state of "pass" (completed cleanly),
+    # "block" (this stage is where the pipeline was stopped), or
+    # "skip" (never reached / not attempted because an earlier
+    # stage already blocked). This mirrors the semantics already
+    # present on TickResult - it does not add new decision logic.
+    stages = [
+        (
+            "1",
+            "NewsAgent",
+            "Evidence collected",
+            "pass",
+        ),
+        (
+            "2",
+            "ChartAgent",
+            "Technical evidence",
+            "pass",
+        ),
+        (
+            "3",
+            "SignalMerger",
+            "Deterministic merge",
+            "pass",
+        ),
+        (
+            "4",
+            "RiskAgent",
+            "Local risk gate",
+            "pass",
+        ),
+        (
+            "5",
+            "Portfolio",
+            ("Approved" if coordinator_approved else "Book risk block"),
+            ("pass" if coordinator_approved else "block"),
+        ),
+        (
+            "6",
+            "Execution",
+            (
+                "Filled"
+                if execution_success is True
+                else "Rejected"
+                if execution_success is False
+                else "Skipped upstream"
+            ),
+            (
+                "pass"
+                if execution_success is True
+                else "block"
+                if execution_success is False
+                else "skip"
+            ),
+        ),
+    ]
+
+    nodes = []
+
+    for index, name, description, state in stages:
+        nodes.append(
+            f"""
+            <div class="pipeline-step state-{state}">
+                <div class="index">{esc(index)}</div>
+                <strong>{esc(name)}</strong>
+                <small>{esc(description)}</small>
             </div>
             """
         )
@@ -1466,7 +1869,6 @@ def render_agent_card(
     display_html(
         f"""
         <div class="agent-card">
-
             <div class="agent-name">
                 {esc(name)}
             </div>
@@ -1477,32 +1879,19 @@ def render_agent_card(
 
             <div class="agent-detail">
                 Confidence:
-                <b>
-                    {fmt_num(confidence, 3)}
-                </b>
+                <b>{fmt_num(confidence, 3)}</b>
                 <br/>
                 {esc(detail)}
             </div>
-
         </div>
         """
     )
 
 
-def render_decision(
-    entry,
-):
+def render_decision(entry):
     outcome = entry.get("outcome")
-
-    ticker = entry.get(
-        "ticker",
-        "—",
-    )
-
-    date = entry.get(
-        "date",
-        "—",
-    )
+    ticker = entry.get("ticker", "—")
+    date_value = entry.get("date", "—")
 
     signal_direction = entry.get("signal_direction")
 
@@ -1525,9 +1914,7 @@ def render_decision(
     risk_notes = entry.get("risk_notes") or []
 
     atr = entry.get("atr")
-
     entry_price = entry.get("entry_price")
-
     proposed_shares = entry.get("proposed_shares")
 
     news_availability = entry.get("news_availability")
@@ -1544,25 +1931,20 @@ def render_decision(
     display_html(
         f"""
         <div class="decision-card {css_class}">
-
             <div class="decision-head">
-
                 <div>
                     <div class="decision-title">
                         {esc(ticker)}
                     </div>
-
                     <div class="decision-date">
-                        {esc(date)}
+                        {esc(date_value)}
                     </div>
                 </div>
 
                 <span class="badge {css_class}">
                     {esc(outcome_label(outcome))}
                 </span>
-
             </div>
-
         </div>
         """
     )
@@ -1623,33 +2005,31 @@ def render_decision(
     with c1:
         st.markdown("#### RiskAgent")
 
-        risk_html = f"""
-        <div class="reason-box">
-            <strong>Risk decision:</strong>
-            {esc(risk_decision or "—")}
-            <br/>
-            <strong>Entry:</strong>
-            {fmt_money(entry_price)}
-            <br/>
-            <strong>ATR:</strong>
-            {fmt_num(atr, 4)}
-            <br/>
-            <strong>Proposed shares:</strong>
-            {fmt_shares(proposed_shares)}
-        </div>
-        """
-
-        display_html(risk_html)
+        display_html(
+            f"""
+            <div class="reason-box">
+                <strong>Risk decision:</strong>
+                {esc(risk_decision or "—")}
+                <br/>
+                <strong>Entry:</strong>
+                {fmt_money(entry_price)}
+                <br/>
+                <strong>ATR:</strong>
+                {fmt_num(atr, 4)}
+                <br/>
+                <strong>Proposed shares:</strong>
+                {fmt_shares(proposed_shares)}
+            </div>
+            """
+        )
 
         if risk_notes:
             with st.expander(f"Risk reasoning ({len(risk_notes)} checks)"):
                 for note in risk_notes:
                     if "BREACH" in str(note).upper():
                         st.error(note)
-
                     elif "REJECT" in str(note).upper():
                         st.warning(note)
-
                     else:
                         st.caption("✓ " + str(note))
 
@@ -1659,13 +2039,10 @@ def render_decision(
         if execution_attempted:
             if execution_success is True:
                 st.success("Broker execution succeeded.")
-
             elif execution_success is False:
                 st.error("Broker execution was attempted but did not succeed.")
-
             else:
                 st.warning("Execution was attempted, but the result is not reported.")
-
         else:
             st.info("Execution was not attempted. The trade was blocked upstream.")
 
@@ -1684,11 +2061,6 @@ def render_decision(
             """
         )
 
-    notes = entry.get(
-        "notes",
-        "",
-    )
-
     st.markdown("#### Why did the system make this decision?")
 
     display_html(
@@ -1697,10 +2069,640 @@ def render_decision(
             <strong>Final outcome:</strong>
             {esc(outcome_label(outcome))}
             <br/><br/>
-            {esc(notes)}
+            {esc(entry.get("notes", ""))}
         </div>
         """
     )
+
+
+# ============================================================
+# PAPER TRADE RENDERING
+# ============================================================
+
+# Best-effort keyword map used only to *label* risk_notes strings
+# that RiskAgent / PortfolioRiskCoordinator already produced. This
+# never re-derives or overrides the underlying risk decision - it
+# only groups existing notes under the named guardrail they most
+# likely came from, matching the documented risk rule set (circuit
+# breaker, position/ticker/sector caps, correlation, book-level
+# risk).
+RISK_CHECK_PATTERNS = [
+    ("Circuit breaker", ("circuit breaker", "daily equity", "daily loss")),
+    ("Position limit", ("position limit", "max position", "concurrent position")),
+    (
+        "Ticker cap",
+        (
+            "ticker cap",
+            "per-ticker",
+            "per ticker",
+            "ticker-level",
+            "ticker exposure",
+        ),
+    ),
+    (
+        "Sector cap",
+        ("sector cap", "sector exposure", "sector limit", "sector-level"),
+    ),
+    ("Correlation", ("correlation",)),
+    (
+        "Book-level risk",
+        (
+            "book-level",
+            "book level",
+            "book risk",
+            "portfolio risk",
+            "portfolio-level",
+            "coordinator",
+        ),
+    ),
+    ("Drawdown", ("drawdown",)),
+]
+
+RISK_BLOCK_KEYWORDS = (
+    "breach",
+    "block",
+    "reject",
+    "exceed",
+    "fail",
+    "denied",
+)
+
+RISK_PASS_KEYWORDS = (
+    "ok",
+    "pass",
+    "approved",
+    "within",
+    "clear",
+)
+
+
+def classify_risk_notes(risk_notes):
+    """
+    Best-effort classification of raw risk_notes strings into named
+    checks with a PASS / BLOCK / INFO status, purely for display.
+
+    Presentation-only: it never changes, recomputes, or overrides
+    the risk decision already made upstream.
+    """
+    checks = []
+    unmatched = []
+
+    for note in risk_notes or []:
+        text = str(note)
+        lowered = text.lower()
+
+        label = None
+
+        for check_name, keywords in RISK_CHECK_PATTERNS:
+            if any(keyword in lowered for keyword in keywords):
+                label = check_name
+                break
+
+        if any(keyword in lowered for keyword in RISK_BLOCK_KEYWORDS):
+            status = "block"
+        elif any(keyword in lowered for keyword in RISK_PASS_KEYWORDS):
+            status = "pass"
+        else:
+            status = "info"
+
+        if label:
+            checks.append((label, status, text))
+        else:
+            unmatched.append((status, text))
+
+    return checks, unmatched
+
+
+def render_risk_matrix(risk_notes):
+    """Structured PASS / BLOCK view of the guardrails RiskAgent and
+    PortfolioRiskCoordinator already evaluated."""
+    checks, unmatched = classify_risk_notes(risk_notes)
+
+    if not checks and not unmatched:
+        st.caption("No risk notes were returned.")
+        return
+
+    if checks:
+        badge_class = {
+            "pass": "success",
+            "block": "danger",
+            "info": "neutral",
+        }
+
+        symbol = {
+            "pass": "✓",
+            "block": "✕",
+            "info": "○",
+        }
+
+        cells = [
+            f"""
+            <div class="risk-check {badge_class[status]}" title="{esc(text)}">
+                <span class="symbol">{symbol[status]}</span>
+                <span class="name">{esc(label)}</span>
+            </div>
+            """
+            for label, status, text in checks
+        ]
+
+        display_html(
+            f"""
+            <div class="risk-matrix">
+                {"".join(cells)}
+            </div>
+            """
+        )
+
+    if unmatched:
+        with st.expander(f"Additional risk notes ({len(unmatched)})"):
+            for status, text in unmatched:
+                if status == "block":
+                    st.error(text)
+                elif status == "pass":
+                    st.caption("✓ " + text)
+                else:
+                    st.caption(text)
+
+
+def render_decision_headline(outcome, notes):
+    """
+    A single, unambiguous plain-language headline for the final
+    decision, shown ahead of any supporting detail.
+    """
+    css_class = outcome_class(outcome)
+
+    headline = {
+        "executed": "TRADE EXECUTED",
+        "held_local_reject": "HOLD — LOCAL RISK BLOCK",
+        "held_book_reject": "HOLD — BOOK RISK BLOCK",
+        "held_execution_reject": "HOLD — BROKER EXECUTION FAILED",
+    }.get(
+        outcome or "",
+        outcome_label(outcome),
+    )
+
+    display_html(
+        f"""
+        <div class="decision-headline {css_class}">
+            <div class="decision-headline-label">
+                Final decision
+            </div>
+            <div class="decision-headline-title">
+                {esc(headline)}
+            </div>
+            <div class="decision-headline-text">
+                {esc(notes or "No additional notes were returned.")}
+            </div>
+        </div>
+        """
+    )
+
+
+def render_decision_lineage(summary):
+    """
+    A compact status row over the full decision lineage: evidence →
+    signal → local risk → book risk → execution → accounting
+    mutation. Complements render_paper_trade_pipeline's per-agent
+    view with a single scannable line.
+    """
+    coordinator_approved = summary.get("coordinator_approved")
+
+    execution_success = summary.get("execution_success")
+
+    position_mutated = execution_success is True
+
+    stages = [
+        ("Evidence", "pass"),
+        ("Signal", "pass"),
+        ("Local risk", "pass"),
+        ("Book risk", "pass" if coordinator_approved else "block"),
+        (
+            "Execution",
+            (
+                "pass"
+                if execution_success is True
+                else "block"
+                if execution_success is False
+                else "skip"
+            ),
+        ),
+        ("Accounting mutation", "pass" if position_mutated else "skip"),
+    ]
+
+    symbols = {"pass": "✓", "block": "✕", "skip": "○"}
+    classes = {"pass": "success", "block": "danger", "skip": "neutral"}
+
+    items = [
+        f"""
+        <div class="lineage-item {classes[state]}">
+            <span class="symbol">{symbols[state]}</span>{esc(label)}
+        </div>
+        """
+        for label, state in stages
+    ]
+
+    display_html(
+        f"""
+        <div class="lineage-row">
+            {"".join(items)}
+        </div>
+        """
+    )
+
+
+def render_paper_evidence_cards(summary):
+    """NewsAgent / ChartAgent / SignalMerger evidence, matching the
+    Decision Explorer's agent cards so both views read the same
+    way."""
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        render_agent_card(
+            "NewsAgent",
+            summary.get("news_direction") or "neutral",
+            summary.get("news_confidence"),
+            (
+                f"{summary.get('news_article_count', 0)} article(s) · "
+                f"{summary.get('news_availability') or 'unknown'}"
+            ),
+        )
+
+    with c2:
+        render_agent_card(
+            "ChartAgent",
+            summary.get("chart_direction") or summary.get("signal_direction"),
+            summary.get("chart_confidence") or summary.get("signal_confidence"),
+            f"ATR {fmt_num(summary.get('atr'), 3)}",
+        )
+
+    with c3:
+        merge_agreement = summary.get("merge_agreement")
+
+        render_agent_card(
+            "SignalMerger",
+            summary.get("signal_direction"),
+            summary.get("signal_confidence"),
+            (
+                "Agreement: "
+                + (
+                    "YES"
+                    if merge_agreement is True
+                    else "NO"
+                    if merge_agreement is False
+                    else "NOT REPORTED"
+                )
+            ),
+        )
+
+
+def render_temporal_integrity(simulated_date, summary):
+    """
+    Make the distinction between simulation date, news as-of date,
+    and wall-clock audit timestamp explicit, so the no-lookahead
+    guarantee is visible rather than implied.
+    """
+    news_as_of = summary.get("news_as_of") or simulated_date.isoformat()
+
+    audit_timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    rows = [
+        ("Simulation date", simulated_date.isoformat()),
+        ("News as-of", str(news_as_of)),
+        ("Replay source", "historical_replay"),
+        ("Audit timestamp", audit_timestamp),
+        ("Future data", "BLOCKED / NOT USED"),
+    ]
+
+    display_html(
+        '<div class="temporal-grid">'
+        + "".join(
+            f"""
+            <div class="temporal-item">
+                <div class="label">{esc(label)}</div>
+                <div class="value">{esc(value)}</div>
+            </div>
+            """
+            for label, value in rows
+        )
+        + "</div>"
+    )
+
+
+def render_paper_trade_result(
+    run_id: str,
+    ticker: str,
+    simulated_date: date,
+    result,
+):
+    summary = paper_trade_result_summary(result)
+
+    outcome = summary["outcome"]
+    css_class = outcome_class(outcome)
+
+    st.markdown("### Orchestration status")
+
+    display_html(
+        f"""
+        <div class="decision-card {css_class}">
+            <div class="decision-head">
+                <div>
+                    <div class="decision-title">
+                        {esc(ticker)}
+                    </div>
+                    <div class="decision-date">
+                        Simulation date:
+                        {esc(simulated_date.isoformat())}
+                        · Run <code>{esc(run_id)}</code>
+                    </div>
+                </div>
+
+                <span class="badge {css_class}">
+                    {esc(outcome_label(outcome))}
+                </span>
+            </div>
+        </div>
+        """
+    )
+
+    render_paper_trade_pipeline(result)
+
+    render_decision_lineage(summary)
+
+    render_decision_headline(outcome, summary["notes"])
+
+    st.markdown("#### Agent evidence")
+
+    render_paper_evidence_cards(summary)
+
+    st.markdown("#### Risk decision")
+
+    display_html(
+        f"""
+        <div class="reason-box">
+            <strong>Risk decision:</strong>
+            {esc(summary["risk_decision"] or "—")}
+            <br/>
+            <strong>Entry:</strong>
+            {fmt_money(summary["entry_price"])}
+            <br/>
+            <strong>ATR:</strong>
+            {fmt_num(summary["atr"], 4)}
+            <br/>
+            <strong>Proposed shares:</strong>
+            {fmt_shares(summary["proposed_shares"])}
+        </div>
+        """
+    )
+
+    render_risk_matrix(summary["risk_notes"])
+
+    st.markdown("#### Decision summary")
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Signal",
+            str(summary["signal_direction"] or "—").upper(),
+        )
+
+    with c2:
+        confidence = safe_float(summary["signal_confidence"])
+
+        st.metric(
+            "Confidence",
+            (f"{confidence:.3f}" if confidence is not None else "—"),
+        )
+
+    with c3:
+        st.metric(
+            "Risk",
+            str(summary["risk_decision"] or "—").upper(),
+        )
+
+    with c4:
+        st.metric(
+            "Execution",
+            (
+                "FILLED"
+                if summary["execution_success"] is True
+                else "REJECTED"
+                if summary["execution_success"] is False
+                else "NOT ATTEMPTED"
+            ),
+        )
+
+    st.markdown("#### Execution")
+
+    if summary["execution_attempted"]:
+        if summary["execution_success"] is True:
+            st.success("Broker execution succeeded.")
+        elif summary["execution_success"] is False:
+            st.error("Broker execution was attempted but did not succeed.")
+        else:
+            st.warning("Execution was attempted, but the result is not reported.")
+    else:
+        blocked_at = {
+            "held_local_reject": "the local risk gate (RiskAgent)",
+            "held_book_reject": (
+                "the portfolio-level risk gate (PortfolioRiskCoordinator)"
+            ),
+        }.get(outcome, "an earlier stage in the pipeline")
+
+        st.info(
+            "Execution was not attempted. The trade was blocked upstream at "
+            f"{blocked_at}, so no order was sent to the broker and portfolio "
+            "state is unchanged."
+        )
+
+    execution_rows = [
+        {
+            "Field": "Attempted",
+            "Value": str(summary["execution_attempted"]),
+        },
+        {
+            "Field": "Success",
+            "Value": str(summary["execution_success"]),
+        },
+        {
+            "Field": "Side",
+            "Value": (summary["execution_side"] or "—"),
+        },
+        {
+            "Field": "Quantity",
+            "Value": fmt_shares(summary["shares"]),
+        },
+        {
+            "Field": "Price",
+            "Value": fmt_money(summary["price"]),
+        },
+        {
+            "Field": "Entry price",
+            "Value": fmt_money(summary["entry_price"]),
+        },
+        {
+            "Field": "Proposed shares",
+            "Value": fmt_shares(summary["proposed_shares"]),
+        },
+        {
+            "Field": "Sector",
+            "Value": summary["sector"] or "—",
+        },
+    ]
+
+    st.dataframe(
+        execution_rows,
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("#### Temporal integrity")
+
+    render_temporal_integrity(simulated_date, summary)
+
+    st.markdown("#### Portfolio accounting")
+
+    pnl = safe_float(summary["realized_pnl"])
+
+    remaining = safe_float(summary["remaining_shares"])
+
+    avg_cost = safe_float(summary["average_cost"])
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Average cost",
+            fmt_money(avg_cost),
+        )
+
+    with c2:
+        st.metric(
+            "Realized P&L",
+            fmt_money(pnl),
+        )
+
+    with c3:
+        st.metric(
+            "Remaining shares",
+            fmt_shares(remaining),
+        )
+
+    with c4:
+        st.metric(
+            "Position closed",
+            "YES" if summary["position_closed"] else "NO",
+        )
+
+    if summary["position_closed"]:
+        display_html(
+            """
+            <div class="accounting-highlight">
+                <div class="title">
+                    Lifecycle state
+                </div>
+                <div class="value">
+                    POSITION CLOSED
+                </div>
+            </div>
+            """
+        )
+    elif remaining is not None and remaining > 0:
+        display_html(
+            """
+            <div class="accounting-highlight">
+                <div class="title">
+                    Lifecycle state
+                </div>
+                <div class="value">
+                    POSITION OPEN
+                </div>
+            </div>
+            """
+        )
+
+    else:
+        display_html(
+            """
+            <div class="accounting-highlight">
+                <div class="title">
+                    Lifecycle state
+                </div>
+                <div class="value">
+                    NO POSITION
+                </div>
+            </div>
+            """
+        )
+
+        st.caption(
+            "No position exists for this ticker. This is not the same as a "
+            "position having been closed — none was ever opened."
+        )
+
+    st.markdown("#### Additional context")
+
+    display_html(
+        f"""
+        <div class="reason-box">
+            <strong>News availability:</strong>
+            {esc(summary["news_availability"] or "—")}
+            <br/>
+            <strong>News articles:</strong>
+            {esc(summary["news_article_count"])}
+            <br/>
+            <strong>News source:</strong>
+            {esc(summary["news_source"] or "—")}
+        </div>
+        """
+    )
+
+    st.markdown("#### Audit identity")
+
+    audit_rows = [
+        {
+            "Field": "Run ID",
+            "Value": run_id,
+        },
+        {
+            "Field": "Ticker",
+            "Value": ticker,
+        },
+        {
+            "Field": "Simulated date",
+            "Value": simulated_date.isoformat(),
+        },
+        {
+            "Field": "Outcome",
+            "Value": outcome_label(outcome),
+        },
+    ]
+
+    st.dataframe(
+        audit_rows,
+        width="stretch",
+        hide_index=True,
+    )
+
+    trade_trace = getattr(
+        result,
+        "trade_trace",
+        None,
+    )
+
+    if trade_trace is not None:
+        st.markdown("#### TradeTrace")
+
+        trace_dict = serialize_object(trade_trace)
+
+        with st.expander(
+            "Inspect full TradeTrace",
+            expanded=True,
+        ):
+            st.json(trace_dict)
+
+    else:
+        st.info("This TickResult did not expose a TradeTrace object.")
 
 
 # ============================================================
@@ -1716,9 +2718,21 @@ if "session_started_at" not in st.session_state:
 if "selected_run" not in st.session_state:
     st.session_state.selected_run = None
 
+if "paper_trade_result" not in st.session_state:
+    st.session_state.paper_trade_result = None
+
+if "paper_trade_run_id" not in st.session_state:
+    st.session_state.paper_trade_run_id = None
+
+if "paper_trade_ticker" not in st.session_state:
+    st.session_state.paper_trade_ticker = None
+
+if "paper_trade_date" not in st.session_state:
+    st.session_state.paper_trade_date = None
+
 
 # ============================================================
-# SIDEBAR
+# INITIAL DATA
 # ============================================================
 
 raw_ledger = load_ledger()
@@ -1726,6 +2740,11 @@ raw_ledger = load_ledger()
 ledger = normalize_ledger(raw_ledger)
 
 backtest_runs = list_backtest_runs(str(BACKTEST_RESULTS_DIR))
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
 
 with st.sidebar:
     st.markdown(
@@ -1759,6 +2778,9 @@ with st.sidebar:
         list_backtest_runs.clear()
         list_audit_runs.clear()
         load_audit_run.clear()
+        audit_table_exists.clear()
+        audit_table_columns.clear()
+        audit_table_counts.clear()
 
         st.rerun()
 
@@ -1783,15 +2805,22 @@ with st.sidebar:
     bt_run_id = st.text_input(
         "Run ID",
         value="",
+        help=("Leave blank to generate a unique audit run ID."),
     )
 
     if st.button(
         "▶ Run backtest",
         width="stretch",
     ):
-        tickers = [t.strip().upper() for t in bt_tickers.split(",") if t.strip()]
+        tickers = [
+            ticker.strip().upper() for ticker in bt_tickers.split(",") if ticker.strip()
+        ]
 
-        run_id = bt_run_id.strip() or f"{bt_start}_{bt_end}"
+        if not tickers:
+            st.error("Enter at least one ticker.")
+            st.stop()
+
+        run_id = bt_run_id.strip() or (f"bt_{bt_start}_{bt_end}_{uuid.uuid4().hex[:8]}")
 
         try:
             with st.spinner("Running multi-agent backtest..."):
@@ -1800,13 +2829,14 @@ with st.sidebar:
                     run_backtest,
                 )
 
-                result = run_backtest(
-                    tickers=tickers,
-                    start_date=str(bt_start),
-                    end_date=str(bt_end),
-                    tick_delay_seconds=bt_delay,
-                    run_id=run_id,
-                )
+                with trace_context():
+                    result = run_backtest(
+                        tickers=tickers,
+                        start_date=str(bt_start),
+                        end_date=str(bt_end),
+                        tick_delay_seconds=bt_delay,
+                        run_id=run_id,
+                    )
 
                 BACKTEST_RESULTS_DIR.mkdir(
                     parents=True,
@@ -1828,8 +2858,9 @@ with st.sidebar:
             list_backtest_runs.clear()
             list_audit_runs.clear()
             load_audit_run.clear()
+            audit_table_counts.clear()
 
-            st.success(f"Completed {len(result.tick_log)} ticks.")
+            st.success(f"Completed {len(result.tick_log)} ticks for `{run_id}`.")
 
             st.rerun()
 
@@ -1844,7 +2875,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption("LangGraph · Risk-gated execution · SimBroker / Alpaca")
+    st.caption("LangGraph · Risk-gated execution · SimBroker / Alpaca · SQLite audit")
 
 
 # ============================================================
@@ -1864,13 +2895,13 @@ display_html(
         </h1>
 
         <p>
-            This console lets you trace how the trading system
-            moves from market information to an actual broker
-            decision. NewsAgent and ChartAgent generate independent
-            evidence, SignalMerger combines it deterministically,
-            RiskAgent performs position sizing and local risk checks,
-            Portfolio Risk evaluates the whole book, and only then
-            can ExecutionAgent submit a trade.
+            Trace how the trading system moves from market
+            information to broker execution. NewsAgent and
+            ChartAgent generate independent evidence, SignalMerger
+            combines it deterministically, RiskAgent performs
+            position sizing and local risk checks, Portfolio Risk
+            evaluates the whole book, and only then can
+            ExecutionAgent submit a trade.
         </p>
 
         <div class="status-pill">
@@ -1891,6 +2922,7 @@ display_html(
     tab_dashboard,
     tab_decisions,
     tab_backtest,
+    tab_paper,
     tab_audit,
     tab_data,
 ) = st.tabs(
@@ -1898,6 +2930,7 @@ display_html(
         "🧠 Command Center",
         "🔎 Decision Explorer",
         "📊 Backtest Lab",
+        "🎯 Agentic Paper Trade",
         "🧾 Run Audit",
         "🗄️ Data & System",
     ]
@@ -1986,11 +3019,7 @@ with tab_dashboard:
                     </div>
                 </div>
                 """
-                for (
-                    label,
-                    value,
-                    cls,
-                ) in kpis
+                for label, value, cls in kpis
             )
             + "</div>"
         )
@@ -2005,10 +3034,7 @@ with tab_dashboard:
 
             rows = []
 
-            for (
-                ticker,
-                position,
-            ) in positions.items():
+            for ticker, position in positions.items():
                 if not isinstance(
                     position,
                     dict,
@@ -2038,7 +3064,9 @@ with tab_dashboard:
 
     else:
         st.info(
-            "No live ledger found. Use the Backtest Lab to inspect historical runs."
+            "No live ledger found. "
+            "Use the Backtest Lab or Agentic Paper Trade "
+            "to inspect runtime behavior."
         )
 
 
@@ -2109,31 +3137,31 @@ with tab_decisions:
                     )
 
                 filtered = [
-                    x
-                    for x in reversed(tick_log)
-                    if (ticker_filter == "All" or x.get("ticker") == ticker_filter)
-                    and (outcome_filter == "All" or x.get("outcome") == outcome_filter)
+                    entry
+                    for entry in reversed(tick_log)
+                    if (ticker_filter == "All" or entry.get("ticker") == ticker_filter)
+                    and (
+                        outcome_filter == "All"
+                        or entry.get("outcome") == outcome_filter
+                    )
                 ]
 
                 st.caption(f"{len(filtered)} matching decision(s)")
 
-                if filtered:
+                visible = filtered[: int(show_latest)]
+
+                if visible:
                     selected_index = st.selectbox(
                         "Inspect decision",
-                        range(
-                            min(
-                                len(filtered),
-                                int(show_latest),
-                            )
-                        ),
+                        range(len(visible)),
                         format_func=lambda i: (
-                            f"{filtered[i].get('date', '—')} · "
-                            f"{filtered[i].get('ticker', '—')} · "
-                            f"{outcome_label(filtered[i].get('outcome'))}"
+                            f"{visible[i].get('date', '—')} · "
+                            f"{visible[i].get('ticker', '—')} · "
+                            f"{outcome_label(visible[i].get('outcome'))}"
                         ),
                     )
 
-                    render_decision(filtered[selected_index])
+                    render_decision(visible[selected_index])
 
 
 # ============================================================
@@ -2249,11 +3277,7 @@ with tab_backtest:
                         </div>
                     </div>
                     """
-                    for (
-                        label,
-                        value,
-                        cls,
-                    ) in kpis
+                    for label, value, cls in kpis
                 )
                 + "</div>"
             )
@@ -2323,10 +3347,7 @@ with tab_backtest:
                         </div>
                     </div>
                     """
-                    for (
-                        label,
-                        value,
-                    ) in telemetry
+                    for label, value in telemetry
                 )
                 + "</div>"
             )
@@ -2390,21 +3411,19 @@ with tab_backtest:
             st.markdown("#### Executed trades")
 
             if trades:
-                rows = []
-
-                for trade in trades:
-                    rows.append(
-                        {
-                            "Date": trade.get("date"),
-                            "Ticker": trade.get("ticker"),
-                            "Shares": fmt_shares(trade.get("shares")),
-                            "Price": fmt_money(trade.get("price")),
-                            "Notes": trade.get(
-                                "notes",
-                                "",
-                            ),
-                        }
-                    )
+                rows = [
+                    {
+                        "Date": trade.get("date"),
+                        "Ticker": trade.get("ticker"),
+                        "Shares": fmt_shares(trade.get("shares")),
+                        "Price": fmt_money(trade.get("price")),
+                        "Notes": trade.get(
+                            "notes",
+                            "",
+                        ),
+                    }
+                    for trade in trades
+                ]
 
                 st.dataframe(
                     rows,
@@ -2414,6 +3433,175 @@ with tab_backtest:
 
             else:
                 st.info("No executed trades.")
+
+
+# ============================================================
+# AGENTIC PAPER TRADE
+# ============================================================
+
+with tab_paper:
+    st.markdown("### 🎯 Agentic Paper Trade")
+
+    st.caption(
+        "Recruiter/demo control plane: one ticker is sent through "
+        "the real top-level orchestration path. The UI does not "
+        "directly call the broker or alter strategy decisions."
+    )
+
+    display_html(
+        """
+        <div class="demo-banner">
+            <div class="demo-banner-title">
+                LIVE ORCHESTRATION DEMONSTRATION
+            </div>
+
+            <div class="demo-banner-text">
+                Select a historical simulation date and ticker, then
+                run the complete agentic decision pipeline:
+                NewsAgent → ChartAgent → SignalMerger → RiskAgent →
+                PortfolioRiskCoordinator → ExecutionAgent → Broker.
+                The resulting accounting and TradeTrace are displayed
+                below.
+            </div>
+        </div>
+        """
+    )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        paper_ticker = st.selectbox(
+            "Ticker",
+            [
+                "AAPL",
+                "MSFT",
+                "GOOGL",
+                "JPM",
+            ],
+            key="paper_ticker_selector",
+        )
+
+    with c2:
+        paper_date = st.date_input(
+            "Simulation date",
+            value=date(
+                2024,
+                6,
+                6,
+            ),
+            key="paper_date_selector",
+            help=(
+                "Use a date supported by the historical replay "
+                "data available to your trading runtime."
+            ),
+        )
+
+    st.markdown("#### Execution path")
+
+    render_architecture()
+
+    st.markdown("#### Run the agentic trade")
+
+    st.caption(
+        "This control invokes orchestrator.tick_runner.run_tick(). "
+        "It does not submit an order directly from Streamlit."
+    )
+
+    if st.button(
+        "🚀 Run Agentic Paper Trade",
+        width="stretch",
+        type="primary",
+    ):
+        try:
+            with st.spinner(
+                f"Running {paper_ticker} through the multi-agent trading pipeline..."
+            ):
+                (
+                    paper_run_id,
+                    paper_result,
+                ) = run_agentic_paper_trade(
+                    ticker=paper_ticker,
+                    simulated_date=paper_date,
+                )
+
+            st.session_state.paper_trade_run_id = paper_run_id
+
+            st.session_state.paper_trade_result = paper_result
+
+            st.session_state.paper_trade_ticker = paper_ticker
+
+            st.session_state.paper_trade_date = paper_date
+
+            st.success(f"Agentic run completed: `{paper_run_id}`")
+
+        except Exception as exc:  # noqa: BLE001
+            if LOGFIRE_OK:
+                logfire.exception(
+                    "Agentic paper trade failed",
+                    error_type=type(exc).__name__,
+                )
+
+            st.error("Agentic paper trade failed.")
+
+            with st.expander("Technical error"):
+                st.exception(exc)
+
+    paper_result = st.session_state.paper_trade_result
+
+    if paper_result is not None:
+        st.divider()
+
+        render_paper_trade_result(
+            run_id=(st.session_state.paper_trade_run_id or "—"),
+            ticker=(st.session_state.paper_trade_ticker or paper_ticker),
+            simulated_date=(st.session_state.paper_trade_date or paper_date),
+            result=paper_result,
+        )
+
+        st.divider()
+
+        st.markdown("#### What this demonstrates")
+
+        demo_rows = [
+            {
+                "Architecture property": "Agent orchestration",
+                "Demonstration": ("UI calls run_tick(), not the broker"),
+            },
+            {
+                "Architecture property": "Independent evidence",
+                "Demonstration": ("NewsAgent + ChartAgent"),
+            },
+            {
+                "Architecture property": "Deterministic decision",
+                "Demonstration": ("SignalMerger"),
+            },
+            {
+                "Architecture property": "Local risk",
+                "Demonstration": ("RiskAgent"),
+            },
+            {
+                "Architecture property": "Book-level risk",
+                "Demonstration": ("PortfolioRiskCoordinator"),
+            },
+            {
+                "Architecture property": "Execution abstraction",
+                "Demonstration": ("ExecutionAgent → Broker"),
+            },
+            {
+                "Architecture property": "Accounting",
+                "Demonstration": ("Average cost / realized P&L / position state"),
+            },
+            {
+                "Architecture property": "Observability",
+                "Demonstration": ("TradeTrace + run identity"),
+            },
+        ]
+
+        st.dataframe(
+            demo_rows,
+            width="stretch",
+            hide_index=True,
+        )
 
 
 # ============================================================
@@ -2430,11 +3618,17 @@ with tab_audit:
 
     audit_runs = list_audit_runs(str(AUDIT_DB_PATH))
 
-    if not audit_runs:
-        st.info(
-            "No persisted audit runs found. "
-            "Run a backtest to create the first audit record."
+    if not AUDIT_DB_PATH.exists():
+        st.warning(
+            "Audit database does not exist yet. "
+            "Run a backtest to create the persistent audit database."
         )
+
+    elif not audit_table_exists("runs"):
+        st.error("SQLite database exists, but the `runs` table is missing.")
+
+    elif not audit_runs:
+        st.info("No persisted audit runs found.")
 
     else:
         run_ids = [str(run.get("run_id")) for run in audit_runs if run.get("run_id")]
@@ -2444,10 +3638,11 @@ with tab_audit:
         if st.session_state.selected_run:
             selected_result_stem = Path(st.session_state.selected_run).stem
 
-        if selected_result_stem in run_ids:
-            default_index = run_ids.index(selected_result_stem)
-        else:
-            default_index = 0
+        default_index = (
+            run_ids.index(selected_result_stem)
+            if selected_result_stem in run_ids
+            else 0
+        )
 
         selected_audit_run = st.selectbox(
             "Audit run",
@@ -2462,7 +3657,7 @@ with tab_audit:
         )
 
         if not audit_data:
-            st.error("Unable to load the selected audit run.")
+            st.error("Unable to load selected audit run.")
 
         else:
             run = audit_data["run"]
@@ -2482,10 +3677,10 @@ with tab_audit:
 
             benchmark_return = run.get("benchmark_return")
 
-            trade_trace_count = run.get("trade_trace_count")
+            trace_count = run.get("trade_trace_count")
 
-            if trade_trace_count is None:
-                trade_trace_count = len(traces)
+            if trace_count is None:
+                trace_count = len(traces)
 
             summary = [
                 (
@@ -2531,7 +3726,7 @@ with tab_audit:
                 ),
                 (
                     "Trade traces",
-                    trade_trace_count,
+                    trace_count,
                     "",
                 ),
             ]
@@ -2549,13 +3744,70 @@ with tab_audit:
                         </div>
                     </div>
                     """
-                    for (
-                        label,
-                        value,
-                        cls,
-                    ) in summary
+                    for label, value, cls in summary
                 )
                 + "</div>"
+            )
+
+            # ------------------------------------------------
+            # JSON ↔ SQLITE RECONCILIATION
+            # ------------------------------------------------
+
+            st.markdown("#### Persistence reconciliation")
+
+            json_path = BACKTEST_RESULTS_DIR / f"{selected_audit_run}.json"
+
+            json_run = None
+
+            if json_path.exists():
+                json_run = load_run(json_path.name)
+
+            json_trace_count = (
+                len(
+                    json_run.get(
+                        "tick_log",
+                        [],
+                    )
+                )
+                if json_run
+                else None
+            )
+
+            sqlite_trace_count = len(traces)
+
+            if json_run is None:
+                reconciliation_status = "JSON RESULT NOT FOUND"
+                reconciliation_class = "audit-warning"
+
+            elif json_trace_count == sqlite_trace_count:
+                reconciliation_status = "TRACE COUNTS MATCH"
+                reconciliation_class = "audit-ok"
+
+            else:
+                reconciliation_status = "TRACE COUNTS DIFFER"
+                reconciliation_class = "audit-warning"
+
+            display_html(
+                f"""
+                <div class="reason-box">
+                    <strong>Run:</strong>
+                    {esc(selected_audit_run)}
+                    <br/>
+                    <strong>JSON result:</strong>
+                    {esc("FOUND" if json_run else "NOT FOUND")}
+                    <br/>
+                    <strong>JSON tick records:</strong>
+                    {esc(json_trace_count if json_trace_count is not None else "—")}
+                    <br/>
+                    <strong>SQLite TradeTrace records:</strong>
+                    {esc(sqlite_trace_count)}
+                    <br/>
+                    <strong>Reconciliation:</strong>
+                    <span class="{reconciliation_class}">
+                        {esc(reconciliation_status)}
+                    </span>
+                </div>
+                """
             )
 
             # ------------------------------------------------
@@ -2641,7 +3893,7 @@ with tab_audit:
             st.markdown("#### Decision traces")
 
             if not traces:
-                st.info("No trade traces were persisted for this run.")
+                st.info("No TradeTrace records were persisted for this run.")
 
             else:
                 tickers = sorted(
@@ -2688,57 +3940,49 @@ with tab_audit:
 
                 st.caption(f"{len(filtered_traces)} persisted trace(s)")
 
-                # ------------------------------------------------
-                # TRACE TABLE
-                # ------------------------------------------------
-
-                rows = []
-
-                for trace in filtered_traces:
-                    rows.append(
-                        {
-                            "Ticker": trace.get(
-                                "ticker",
+                rows = [
+                    {
+                        "Ticker": trace.get(
+                            "ticker",
+                            "—",
+                        ),
+                        "Tick": trace.get(
+                            "tick_id",
+                            "—",
+                        ),
+                        "Date": trace.get(
+                            "simulated_date",
+                            "—",
+                        ),
+                        "Signal": str(
+                            trace.get(
+                                "signal_direction",
                                 "—",
-                            ),
-                            "Tick": trace.get(
-                                "tick_id",
-                                "—",
-                            ),
-                            "Date": trace.get(
-                                "simulated_date",
-                                "—",
-                            ),
-                            "Signal": str(
-                                trace.get(
-                                    "signal_direction",
-                                    "—",
-                                )
-                                or "—"
-                            ).upper(),
-                            "Confidence": fmt_num(
-                                trace.get("signal_confidence"),
-                                3,
-                            ),
-                            "Risk": trace.get(
+                            )
+                            or "—"
+                        ).upper(),
+                        "Confidence": fmt_num(
+                            trace.get("signal_confidence"),
+                            3,
+                        ),
+                        "Risk": str(
+                            trace.get(
                                 "risk_decision",
                                 "—",
-                            ),
-                            "Shares": fmt_shares(trace.get("final_shares")),
-                            "Execution": (trace.get("execution_side") or "—"),
-                            "Outcome": outcome_label(trace.get("outcome")),
-                        }
-                    )
+                            )
+                        ),
+                        "Shares": fmt_shares(trace.get("final_shares")),
+                        "Execution": (trace.get("execution_side") or "—"),
+                        "Outcome": outcome_label(trace.get("outcome")),
+                    }
+                    for trace in filtered_traces
+                ]
 
                 st.dataframe(
                     rows,
                     width="stretch",
                     hide_index=True,
                 )
-
-                # ------------------------------------------------
-                # INDIVIDUAL TRACE
-                # ------------------------------------------------
 
                 if filtered_traces:
                     selected_trace_index = st.selectbox(
@@ -2754,22 +3998,25 @@ with tab_audit:
 
                     trace = filtered_traces[selected_trace_index]
 
+                    # ------------------------------------------------
+                    # DECISION LINEAGE
+                    # ------------------------------------------------
+
                     st.markdown("#### Decision lineage")
 
-                    signal_direction = trace.get("signal_direction")
-
-                    execution_side = trace.get("execution_side")
-
-                    risk_decision = trace.get("risk_decision")
-
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2, c3, c4 = st.columns(4)
 
                     with c1:
                         st.markdown("**SignalMerger**")
 
                         st.metric(
                             "Direction",
-                            str(signal_direction or "—").upper(),
+                            str(
+                                trace.get(
+                                    "signal_direction",
+                                    "—",
+                                )
+                            ).upper(),
                         )
 
                         st.caption(
@@ -2781,32 +4028,60 @@ with tab_audit:
                         )
 
                     with c2:
-                        st.markdown("**Risk / Coordinator**")
+                        st.markdown("**RiskAgent**")
 
                         st.metric(
-                            "Risk",
-                            str(risk_decision or "—").upper(),
+                            "Approved",
+                            str(
+                                trace.get(
+                                    "risk_approved",
+                                    "—",
+                                )
+                            ),
                         )
 
                         st.caption(
-                            "Proposed shares: "
+                            "Raw: "
+                            + fmt_shares(trace.get("raw_shares"))
+                            + " · Proposed: "
                             + fmt_shares(trace.get("proposed_shares"))
-                            + " · Final: "
-                            + fmt_shares(trace.get("final_shares"))
                         )
 
                     with c3:
+                        st.markdown("**Coordinator**")
+
+                        st.metric(
+                            "Shares",
+                            fmt_shares(trace.get("final_shares")),
+                        )
+
+                        st.caption(
+                            "Approved: "
+                            + str(
+                                trace.get(
+                                    "coordinator_approved",
+                                    "—",
+                                )
+                            )
+                        )
+
+                    with c4:
                         st.markdown("**Execution**")
 
                         st.metric(
                             "Side",
-                            str(execution_side or "—").upper(),
+                            str(
+                                trace.get(
+                                    "execution_side",
+                                    "—",
+                                )
+                            ).upper(),
                         )
 
                         st.caption("Success: " + str(trace.get("execution_success")))
 
                     # ------------------------------------------------
-                    # NEWS / CHART
+                    # AGENT EVIDENCE
                     # ------------------------------------------------
 
                     st.markdown("#### Agent evidence")
@@ -2902,10 +4177,55 @@ with tab_audit:
                         )
 
                     # ------------------------------------------------
+                    # EXECUTION DETAILS
+                    # ------------------------------------------------
+
+                    st.markdown("#### Execution details")
+
+                    execution_rows = [
+                        {
+                            "Field": "Attempted",
+                            "Value": str(trace.get("execution_attempted")),
+                        },
+                        {
+                            "Field": "Success",
+                            "Value": str(trace.get("execution_success")),
+                        },
+                        {
+                            "Field": "Side",
+                            "Value": trace.get(
+                                "execution_side",
+                                "—",
+                            ),
+                        },
+                        {
+                            "Field": "Quantity",
+                            "Value": fmt_shares(trace.get("execution_quantity")),
+                        },
+                        {
+                            "Field": "Price",
+                            "Value": fmt_money(trace.get("execution_price")),
+                        },
+                        {
+                            "Field": "Order ID",
+                            "Value": trace.get(
+                                "order_id",
+                                "—",
+                            ),
+                        },
+                    ]
+
+                    st.dataframe(
+                        execution_rows,
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+                    # ------------------------------------------------
                     # ACCOUNTING
                     # ------------------------------------------------
 
-                    st.markdown("#### Accounting")
+                    st.markdown("#### Portfolio accounting")
 
                     accounting_rows = [
                         {
@@ -2936,9 +4256,7 @@ with tab_audit:
                     # RISK CHECKS
                     # ------------------------------------------------
 
-                    risk_checks = (
-                        trace.get("risk_checks") or trace.get("risk_notes") or []
-                    )
+                    risk_checks = trace.get("risk_checks") or []
 
                     if risk_checks:
                         with st.expander(f"Risk checks ({len(risk_checks)})"):
@@ -2949,7 +4267,7 @@ with tab_audit:
                     # RAW TRACE
                     # ------------------------------------------------
 
-                    with st.expander("Raw persisted trace"):
+                    with st.expander("Raw persisted TradeTrace"):
                         st.json(trace)
 
 
@@ -3003,10 +4321,7 @@ with tab_data:
                             status,
                         ),
                     }
-                    for (
-                        ticker,
-                        status,
-                    ) in sorted(quality["by_ticker"].items())
+                    for ticker, status in sorted(quality["by_ticker"].items())
                 ]
 
                 st.dataframe(
@@ -3073,6 +4388,10 @@ with tab_data:
             "No-lookahead OHLCV/news replay",
         ),
         (
+            "TradeTrace",
+            "Deterministic decision lineage",
+        ),
+        (
             "SQLite Run Audit",
             "Persistent run + trade-trace observability",
         ),
@@ -3084,10 +4403,7 @@ with tab_data:
                 "Component": name,
                 "Responsibility": responsibility,
             }
-            for (
-                name,
-                responsibility,
-            ) in components
+            for name, responsibility in components
         ],
         width="stretch",
         hide_index=True,
@@ -3118,33 +4434,23 @@ with tab_data:
         with st.expander("SQLite audit database"):
             st.write(f"Path: `{AUDIT_DB_PATH}`")
 
-            audit_table_counts = {}
+            counts = audit_table_counts(str(AUDIT_DB_PATH))
 
-            for table in [
-                "runs",
-                "trade_traces",
-                "trades",
-                "agent_logs",
-                "portfolio_snapshots",
-            ]:
-                rows = _sqlite_rows(f"SELECT COUNT(*) AS count FROM {table}")
+            if counts:
+                st.dataframe(
+                    [
+                        {
+                            "Table": table,
+                            "Rows": count,
+                        }
+                        for table, count in counts.items()
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
 
-                audit_table_counts[table] = rows[0]["count"] if rows else 0
-
-            st.dataframe(
-                [
-                    {
-                        "Table": table,
-                        "Rows": count,
-                    }
-                    for (
-                        table,
-                        count,
-                    ) in audit_table_counts.items()
-                ],
-                width="stretch",
-                hide_index=True,
-            )
+            else:
+                st.warning("No audit tables detected.")
 
 
 # ============================================================
@@ -3162,8 +4468,7 @@ display_html(
     ">
         AI Multi-Agent Trading Firm · LangGraph orchestration ·
         deterministic risk gating · historical replay ·
-        SimBroker / Alpaca · execution telemetry ·
-        SQLite persistent audit
+        SimBroker / Alpaca · TradeTrace · SQLite persistent audit
     </div>
     """
 )

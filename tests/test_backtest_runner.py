@@ -27,7 +27,7 @@ import pytest
 import data_sources.historical as historical_module
 import graph.nodes as nodes_module
 from agents.news_agent import NewsAgentResult, NewsAvailability
-from data_sources import get_simulated_date, set_simulated_date
+from data_sources import fetch_ohlcv, get_simulated_date, set_simulated_date
 from data_sources.schemas import DataSourceMode, OHLCVBar, OHLCVSeries
 from graph.state import Signal
 
@@ -132,8 +132,6 @@ def test_lookahead_guard_blocks_missing_simulated_date(monkeypatch):
 
     set_simulated_date(None)
 
-    from data_sources import fetch_ohlcv
-
     try:
         with pytest.raises(RuntimeError):
             fetch_ohlcv(
@@ -160,8 +158,6 @@ def test_backtest_historical_fixture_never_exposes_future_bars():
         - missing simulated date -> reject
         - valid simulated date -> only historical/present bars are visible
     """
-
-    from data_sources import fetch_ohlcv
 
     simulated_date = datetime(
         2026,

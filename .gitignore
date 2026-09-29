@@ -5,4 +5,12 @@ __pycache__/
 *.pyc
 data_sources/*.json
 .pytest_cache/
+
+# Runtime databases and ledgers
+*.db
+backtest/*.json
+portfolio/*.json
+
+# Generated backtest results
+backtest/results/
 "@ | Out-File -Encoding utf8 .gitignore

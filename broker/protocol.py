@@ -12,7 +12,14 @@ from typing import Literal, Protocol
 from pydantic import BaseModel
 
 OrderSide = Literal["buy", "sell"]
-OrderStatus = Literal["filled", "pending", "rejected"]
+OrderStatus = Literal[
+    "filled",
+    "pending",
+    "partially_filled",
+    "rejected",
+    "canceled",
+    "expired",
+]
 
 
 class OrderResult(BaseModel):
@@ -21,6 +28,7 @@ class OrderResult(BaseModel):
     side: OrderSide
     qty: float
     status: OrderStatus
+    filled_qty: float = 0.0
     filled_avg_price: float | None = None
     raw: dict = {}
 

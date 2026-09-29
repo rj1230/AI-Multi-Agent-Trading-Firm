@@ -27,17 +27,37 @@ except ImportError:
     TradingClient = None  # alpaca-py not installed -- see __init__ below
 
 
-_TERMINAL_REJECT_STATUSES = {"rejected", "canceled", "expired"}
-
-
 def _map_status(alpaca_status) -> str:
+    """
+    Map Alpaca's order lifecycle status into the broker protocol.
+
+    Known lifecycle states are preserved rather than collapsed into
+    ``rejected`` so downstream execution, accounting, and audit layers can
+    distinguish a full fill from a partial fill, pending order, cancellation,
+    or expiration.
+
+    Unknown non-terminal states intentionally map to ``pending``.
+    """
+
     value = (
         alpaca_status.value if hasattr(alpaca_status, "value") else str(alpaca_status)
     )
+
     if value == "filled":
         return "filled"
-    if value in _TERMINAL_REJECT_STATUSES:
+
+    if value == "partially_filled":
+        return "partially_filled"
+
+    if value == "canceled":
+        return "canceled"
+
+    if value == "expired":
+        return "expired"
+
+    if value == "rejected":
         return "rejected"
+
     return "pending"
 
 
@@ -52,6 +72,7 @@ class AlpacaBroker:
             raise ImportError(
                 "alpaca-py is not installed -- run: uv pip install alpaca-py"
             )
+
         self.client = TradingClient(
             api_key or os.environ["ALPACA_API_KEY"],
             secret_key or os.environ["ALPACA_SECRET_KEY"],
@@ -66,6 +87,7 @@ class AlpacaBroker:
         client_order_id: str | None = None,
     ) -> OrderResult:
         alpaca_side = AlpacaOrderSide.BUY if side == "buy" else AlpacaOrderSide.SELL
+
         request = MarketOrderRequest(
             symbol=ticker,
             qty=qty,
@@ -73,6 +95,7 @@ class AlpacaBroker:
             time_in_force=TimeInForce.DAY,
             client_order_id=client_order_id,
         )
+
         try:
             order = self.client.submit_order(request)
         except Exception as exc:  # noqa: BLE001
@@ -82,14 +105,17 @@ class AlpacaBroker:
                 side=side,
                 qty=qty,
                 status="rejected",
+                filled_qty=0.0,
                 raw={"error": str(exc)},
             )
+
         return OrderResult(
             order_id=str(order.id),
             ticker=ticker,
             side=side,
             qty=qty,
             status=_map_status(order.status),
+            filled_qty=float(order.filled_qty or 0.0),
             filled_avg_price=float(order.filled_avg_price)
             if order.filled_avg_price
             else None,
@@ -101,6 +127,7 @@ class AlpacaBroker:
 
     def get_positions(self) -> dict[str, BrokerPosition]:
         positions = self.client.get_all_positions()
+
         return {
             p.symbol: BrokerPosition(
                 ticker=p.symbol,
@@ -113,6 +140,7 @@ class AlpacaBroker:
 
     def get_account(self) -> AccountInfo:
         account = self.client.get_account()
+
         return AccountInfo(
             equity=float(account.equity),
             cash=float(account.cash),

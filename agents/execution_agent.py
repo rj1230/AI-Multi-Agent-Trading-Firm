@@ -5,8 +5,20 @@ interesting decisions (what to trade, how much, whether it's safe)
 happened upstream in SignalMerger and RiskAgent. Its only job is faithfully
 carrying out an already-approved instruction.
 
-Retries once on failure (network blip, broker timeout), then falls back to
-a logged hold rather than silently losing the trade or retrying forever.
+Retries once on submission failure (network blip, broker timeout), then
+falls back to a logged hold rather than silently losing the trade or
+retrying forever.
+
+Broker lifecycle states are preserved:
+
+    filled
+    partially_filled
+    pending
+    rejected
+    canceled
+    expired
+
+Only ``filled`` is considered a fully successful execution.
 
 The client_order_id is scoped to the logical execution context
 (run_id + tick_id + ticker + side + quantity), making retries of the same
@@ -83,20 +95,102 @@ def run_execution_agent(
                 client_order_id=client_order_id,
             )
         except Exception as exc:  # noqa: BLE001
+            # A submission exception is the uncertain failure case.
+            #
+            # Retry using the exact same client_order_id so the broker can
+            # deduplicate the logical order if the first submission actually
+            # reached the broker before the exception occurred.
             last_error = str(exc)
             continue
 
-        if order.status == "rejected":
-            last_error = order.raw.get("reason") or order.raw.get("error") or "rejected"
-            continue
+        # --------------------------------------------------------------
+        # Broker lifecycle result received successfully.
+        #
+        # Do NOT retry based on lifecycle status. The broker has accepted
+        # and identified the order, so its lifecycle must be preserved.
+        #
+        # In particular, a partial fill must not be converted into a full
+        # execution and must not be submitted again automatically.
+        # --------------------------------------------------------------
 
+        if order.status == "filled":
+            return ExecutionResult(
+                ticker=risk_decision.ticker,
+                executed=True,
+                order=order,
+                notes=(
+                    f"Order {order.order_id} filled "
+                    f"{order.filled_qty} of {order.qty} shares "
+                    f"of {order.ticker}."
+                ),
+            )
+
+        if order.status == "partially_filled":
+            return ExecutionResult(
+                ticker=risk_decision.ticker,
+                executed=False,
+                order=order,
+                notes=(
+                    f"Order {order.order_id} partially filled "
+                    f"{order.filled_qty} of {order.qty} shares "
+                    f"of {order.ticker}."
+                ),
+            )
+
+        if order.status == "pending":
+            return ExecutionResult(
+                ticker=risk_decision.ticker,
+                executed=False,
+                order=order,
+                notes=(
+                    f"Order {order.order_id} is pending for "
+                    f"{order.qty} shares of {order.ticker}."
+                ),
+            )
+
+        if order.status == "canceled":
+            return ExecutionResult(
+                ticker=risk_decision.ticker,
+                executed=False,
+                order=order,
+                notes=(
+                    f"Order {order.order_id} was canceled after requesting "
+                    f"{order.qty} shares of {order.ticker}."
+                ),
+            )
+
+        if order.status == "expired":
+            return ExecutionResult(
+                ticker=risk_decision.ticker,
+                executed=False,
+                order=order,
+                notes=(
+                    f"Order {order.order_id} expired after requesting "
+                    f"{order.qty} shares of {order.ticker}."
+                ),
+            )
+
+        if order.status == "rejected":
+            reason = order.raw.get("reason") or order.raw.get("error") or "rejected"
+
+            return ExecutionResult(
+                ticker=risk_decision.ticker,
+                executed=False,
+                order=order,
+                notes=(f"Order {order.order_id or 'unknown'} rejected: {reason}."),
+            )
+
+        # Defensive fallback for an unexpected broker status.
+        #
+        # The protocol currently constrains status values, but preserving
+        # the order is safer than treating an unknown status as a fill.
         return ExecutionResult(
             ticker=risk_decision.ticker,
-            executed=True,
+            executed=False,
             order=order,
             notes=(
-                f"Order {order.order_id} {order.status} "
-                f"for {order.qty} shares of {order.ticker}."
+                f"Order {order.order_id} returned unexpected status "
+                f"{order.status!r}; no accounting mutation performed."
             ),
         )
 
@@ -105,7 +199,8 @@ def run_execution_agent(
         executed=False,
         order=None,
         notes=(
-            f"Execution failed after {max_retries + 1} attempt(s): "
+            f"Execution submission failed after "
+            f"{max_retries + 1} attempt(s): "
             f"{last_error}. Falling back to hold."
         ),
     )

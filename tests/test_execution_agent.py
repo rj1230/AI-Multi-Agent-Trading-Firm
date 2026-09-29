@@ -33,7 +33,10 @@ def test_approved_decision_executes_via_broker():
     )
 
     assert result.executed is True
+    assert result.order is not None
     assert result.order.status == "filled"
+    assert result.order.filled_qty == 10.0
+    assert result.order.filled_qty == result.order.qty
     assert "AAPL" in broker.get_positions()
 
 
@@ -56,7 +59,11 @@ def test_bearish_signal_maps_to_sell_side():
         broker,
     )
 
+    assert result.executed is True
+    assert result.order is not None
+    assert result.order.status == "filled"
     assert result.order.side == "sell"
+    assert result.order.filled_qty == 5.0
 
 
 def test_unapproved_decision_is_never_sent_to_broker():
@@ -84,6 +91,7 @@ def test_unapproved_decision_is_never_sent_to_broker():
     )
 
     assert result.executed is False
+    assert result.order is None
     assert "not approve" in result.notes.lower()
 
 
@@ -107,6 +115,7 @@ class _FlakyThenOkBroker:
             side=side,
             qty=qty,
             status="filled",
+            filled_qty=qty,
             filled_avg_price=100.0,
         )
 
@@ -130,6 +139,9 @@ def test_retries_once_after_transient_failure_then_succeeds():
     )
 
     assert result.executed is True
+    assert result.order is not None
+    assert result.order.status == "filled"
+    assert result.order.filled_qty == result.order.qty
     assert broker.calls == 2
 
     # Retry must reuse the exact same logical client order identity.
@@ -137,13 +149,19 @@ def test_retries_once_after_transient_failure_then_succeeds():
 
 
 class _AlwaysRejectsBroker:
+    def __init__(self):
+        self.calls = 0
+
     def submit_order(self, ticker, side, qty, client_order_id=None):
+        self.calls += 1
+
         return OrderResult(
             order_id="X",
             ticker=ticker,
             side=side,
             qty=qty,
             status="rejected",
+            filled_qty=0.0,
             raw={"reason": "no buying power"},
         )
 
@@ -154,7 +172,7 @@ class _AlwaysRejectsBroker:
         raise NotImplementedError
 
 
-def test_falls_back_to_hold_after_exhausting_retries():
+def test_preserves_rejected_order_without_retry():
     broker = _AlwaysRejectsBroker()
 
     result = run_execution_agent(
@@ -167,8 +185,122 @@ def test_falls_back_to_hold_after_exhausting_retries():
     )
 
     assert result.executed is False
-    assert result.order is None
-    assert "fall" in result.notes.lower()
+    assert result.order is not None
+    assert result.order.status == "rejected"
+    assert result.order.filled_qty == 0.0
+    assert result.order.order_id == "X"
+    assert broker.calls == 1
+    assert "no buying power" in result.notes
+
+
+class _LifecycleBroker:
+    """Returns one deterministic broker lifecycle result."""
+
+    def __init__(self, status, filled_qty=0.0):
+        self.status = status
+        self.filled_qty = filled_qty
+        self.calls = 0
+
+    def submit_order(self, ticker, side, qty, client_order_id=None):
+        self.calls += 1
+
+        return OrderResult(
+            order_id=f"ORDER-{self.status}",
+            ticker=ticker,
+            side=side,
+            qty=qty,
+            status=self.status,
+            filled_qty=self.filled_qty,
+            filled_avg_price=100.0 if self.filled_qty > 0 else None,
+            raw={"reason": "test"} if self.status == "rejected" else {},
+        )
+
+    def get_positions(self):
+        return {}
+
+    def get_account(self):
+        raise NotImplementedError
+
+
+def test_partial_fill_is_not_treated_as_full_execution():
+    broker = _LifecycleBroker(
+        status="partially_filled",
+        filled_qty=4.0,
+    )
+
+    result = run_execution_agent(
+        _approved_decision(shares=10.0),
+        _bullish_signal(),
+        broker,
+    )
+
+    assert result.executed is False
+    assert result.order is not None
+    assert result.order.status == "partially_filled"
+    assert result.order.qty == 10.0
+    assert result.order.filled_qty == 4.0
+    assert result.order.filled_qty < result.order.qty
+    assert broker.calls == 1
+
+
+def test_pending_order_is_preserved_without_retry():
+    broker = _LifecycleBroker(
+        status="pending",
+        filled_qty=0.0,
+    )
+
+    result = run_execution_agent(
+        _approved_decision(),
+        _bullish_signal(),
+        broker,
+        max_retries=1,
+    )
+
+    assert result.executed is False
+    assert result.order is not None
+    assert result.order.status == "pending"
+    assert result.order.filled_qty == 0.0
+    assert broker.calls == 1
+
+
+def test_canceled_order_is_preserved_without_retry():
+    broker = _LifecycleBroker(
+        status="canceled",
+        filled_qty=0.0,
+    )
+
+    result = run_execution_agent(
+        _approved_decision(),
+        _bullish_signal(),
+        broker,
+        max_retries=1,
+    )
+
+    assert result.executed is False
+    assert result.order is not None
+    assert result.order.status == "canceled"
+    assert result.order.filled_qty == 0.0
+    assert broker.calls == 1
+
+
+def test_expired_order_is_preserved_without_retry():
+    broker = _LifecycleBroker(
+        status="expired",
+        filled_qty=0.0,
+    )
+
+    result = run_execution_agent(
+        _approved_decision(),
+        _bullish_signal(),
+        broker,
+        max_retries=1,
+    )
+
+    assert result.executed is False
+    assert result.order is not None
+    assert result.order.status == "expired"
+    assert result.order.filled_qty == 0.0
+    assert broker.calls == 1
 
 
 def test_same_logical_execution_is_idempotent():
@@ -231,6 +363,8 @@ def test_different_ticks_allow_legitimate_separate_executions():
 
     assert first.executed is True
     assert second.executed is True
+    assert first.order is not None
+    assert second.order is not None
     assert first.order.order_id != second.order.order_id
     assert broker.get_positions()["AAPL"].qty == 20
     assert broker.cash == 8_000.0
@@ -265,6 +399,8 @@ def test_different_runs_allow_legitimate_separate_executions():
 
     assert first.executed is True
     assert second.executed is True
+    assert first.order is not None
+    assert second.order is not None
     assert first.order.order_id != second.order.order_id
     assert broker.get_positions()["AAPL"].qty == 20
     assert broker.cash == 8_000.0

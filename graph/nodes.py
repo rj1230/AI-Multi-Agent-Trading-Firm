@@ -30,7 +30,10 @@ Design principles:
 7. Broker implementation is hidden behind the Broker protocol.
 8. PortfolioLedger is the local portfolio source of truth.
 9. NewsAgent also propagates data provenance into TradingState.
-10. Portfolio accounting is performed only after confirmed broker fills.
+10. Portfolio accounting is performed from actual broker-filled
+    quantity, never requested order quantity.
+11. Broker lifecycle state is preserved independently from
+    full-execution success.
 """
 
 from __future__ import annotations
@@ -250,8 +253,8 @@ def news_agent_node(
         # ------------------------------------------------------
         # News provenance.
         # ------------------------------------------------------
-        "news_availability": (result.availability.value),
-        "news_article_count": (result.article_count),
+        "news_availability": result.availability.value,
+        "news_article_count": result.article_count,
         "news_source": result.source,
         "news_as_of": result.as_of,
         # ------------------------------------------------------
@@ -290,7 +293,7 @@ def chart_agent_node(
         "chart_signal": signal,
         "agent_logs": _log(
             "ChartAgent",
-            (f"{signal.direction} (conf={signal.confidence:.2f}): {signal.rationale}"),
+            f"{signal.direction} (conf={signal.confidence:.2f}): {signal.rationale}",
         ),
     }
 
@@ -382,7 +385,7 @@ def risk_agent_node(
         return {
             "risk_decision": RiskDecision.REJECTED,
             "risk_notes": [
-                ("Cannot size trade: insufficient OHLCV history for ATR/entry price.")
+                "Cannot size trade: insufficient OHLCV history for ATR/entry price."
             ],
             "atr": atr,
             "entry_price": entry_price,
@@ -390,7 +393,7 @@ def risk_agent_node(
             "proposed_shares": 0.0,
             "agent_logs": _log(
                 "RiskAgent",
-                ("rejected: insufficient price history for sizing"),
+                "rejected: insufficient price history for sizing",
             ),
         }
 
@@ -426,7 +429,7 @@ def risk_agent_node(
         "atr": atr,
         "entry_price": entry_price,
         "sector": sector,
-        "proposed_shares": (decision.proposed_shares),
+        "proposed_shares": decision.proposed_shares,
         "agent_logs": _log(
             "RiskAgent",
             risk_message,
@@ -448,7 +451,16 @@ def execution_agent_node(
     ExecutionAgent is responsible for broker execution.
     PortfolioLedger is responsible for portfolio accounting.
 
-    Accounting is created only after a confirmed broker fill.
+    Lifecycle semantics:
+
+    - execution_success=True only for a complete broker fill.
+    - execution_status preserves the broker lifecycle status.
+    - execution_quantity is the requested order quantity.
+    - execution_filled_quantity is the actual broker-filled quantity.
+    - accounting uses execution_filled_quantity.
+    - pending/rejected/canceled/expired orders do not mutate accounting.
+    - partial fills do mutate accounting because they represent real
+      broker execution, even though execution_success remains False.
     """
 
     broker = _broker()
@@ -470,20 +482,45 @@ def execution_agent_node(
         tick_id=state.tick_id,
     )
 
+    order = result.order
+
     # --------------------------------------------------------------
-    # Accounting is created only after a confirmed broker fill.
+    # Preserve broker lifecycle information independently from
+    # full-execution success.
+    # --------------------------------------------------------------
+    execution_status = order.status if order is not None else None
+
+    execution_side = order.side if order is not None else None
+
+    execution_quantity = order.qty if order is not None else None
+
+    execution_filled_quantity = order.filled_qty if order is not None else None
+
+    execution_price = order.filled_avg_price if order is not None else None
+
+    execution_order_id = order.order_id if order is not None else None
+
+    # --------------------------------------------------------------
+    # Portfolio accounting is driven by ACTUAL broker fill quantity.
+    #
+    # This is deliberately independent of result.executed because
+    # partial fills have executed real quantity while
+    # execution_success remains False.
     # --------------------------------------------------------------
     accounting = None
 
-    if result.executed and result.order is not None:
-        fill_price = result.order.filled_avg_price or state.entry_price or 0.0
+    if order is not None and order.filled_qty > 0:
+        fill_price = order.filled_avg_price or state.entry_price or 0.0
+
+        if fill_price <= 0:
+            raise ValueError("Cannot record broker fill without a positive fill price.")
 
         fill_sector = state.sector or get_sector(state.ticker)
 
         accounting = _ledger().record_fill(
             ticker=state.ticker,
-            side=result.order.side,
-            qty=result.order.qty,
+            side=order.side,
+            qty=order.filled_qty,
             price=fill_price,
             sector=fill_sector,
         )
@@ -491,24 +528,12 @@ def execution_agent_node(
     return {
         "execution_notes": result.notes,
         "execution_success": result.executed,
-        "execution_side": (
-            result.order.side
-            if (result.executed and result.order is not None)
-            else None
-        ),
-        "execution_quantity": (
-            result.order.qty if (result.executed and result.order is not None) else None
-        ),
-        "execution_price": (
-            result.order.filled_avg_price
-            if (result.executed and result.order is not None)
-            else None
-        ),
-        "execution_order_id": (
-            result.order.order_id
-            if (result.executed and result.order is not None)
-            else None
-        ),
+        "execution_status": execution_status,
+        "execution_side": execution_side,
+        "execution_quantity": execution_quantity,
+        "execution_filled_quantity": execution_filled_quantity,
+        "execution_price": execution_price,
+        "execution_order_id": execution_order_id,
         "accounting": accounting,
         "agent_logs": _log(
             "ExecutionAgent",
@@ -534,9 +559,16 @@ def hold_node(
     return {
         "execution_notes": reason,
         "execution_success": False,
+        "execution_status": None,
+        "execution_side": None,
+        "execution_quantity": None,
+        "execution_filled_quantity": None,
+        "execution_price": None,
+        "execution_order_id": None,
+        "accounting": None,
         "agent_logs": _log(
             "HoldNode",
-            (f"holding {state.ticker}, reason={state.risk_notes}"),
+            f"holding {state.ticker}, reason={state.risk_notes}",
         ),
     }
 

@@ -14,6 +14,12 @@ during one orchestration tick:
         -> Execution
         -> Accounting
 
+Execution lifecycle semantics:
+
+    quantity        = requested order quantity
+    filled_quantity = actual quantity filled by the broker
+    status          = broker execution lifecycle state
+
 The structure is intentionally framework-independent so it can later be
 serialized to JSON, persisted to SQLite, displayed in Streamlit, or emitted
 through an observability backend.
@@ -77,12 +83,30 @@ class CoordinatorTrace:
 
 @dataclass
 class ExecutionTrace:
-    """Broker/execution outcome."""
+    """
+    Broker/execution lifecycle outcome.
+
+    quantity represents the requested order quantity.
+
+    filled_quantity represents the quantity actually filled by the broker.
+    It may be smaller than quantity for a partial fill and is zero for
+    pending or zero-fill terminal states.
+
+    status preserves the broker lifecycle state:
+        filled
+        pending
+        partially_filled
+        rejected
+        canceled
+        expired
+    """
 
     attempted: bool = False
     success: bool | None = None
+    status: str | None = None
     side: str | None = None
     quantity: float | None = None
+    filled_quantity: float | None = None
     price: float | None = None
     order_id: str | None = None
     notes: list[str] = field(default_factory=list)

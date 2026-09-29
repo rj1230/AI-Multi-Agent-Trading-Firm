@@ -340,6 +340,194 @@ class RunAuditStore:
 
         return [json.loads(row["trace_json"]) for row in rows]
 
+    def get_run_audit(self, run_id: str) -> dict[str, Any]:
+        """
+        Reconstruct and validate the complete persisted audit lifecycle
+        for one run.
+
+        This method is observational only. It never modifies persistence
+        state or participates in trading decisions.
+
+        Reconstruction path:
+
+            runs
+                ↓
+            trade_traces
+                ↓
+            trades
+
+        The returned structure contains the reconstructed lifecycle,
+        normalized execution records, deterministic invariants, and
+        diagnostics.
+        """
+        with self._connection() as conn:
+            run_row = conn.execute(
+                """
+                SELECT *
+                FROM runs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+
+            if run_row is None:
+                raise KeyError(f"Unknown run_id: {run_id}")
+
+            trace_rows = conn.execute(
+                """
+                SELECT *
+                FROM trade_traces
+                WHERE run_id = ?
+                ORDER BY simulated_date, ticker, id
+                """,
+                (run_id,),
+            ).fetchall()
+
+            trade_rows = conn.execute(
+                """
+                SELECT
+                    t.*
+                FROM trades AS t
+                INNER JOIN trade_traces AS tt
+                    ON tt.trace_key = t.trace_id
+                WHERE tt.run_id = ?
+                ORDER BY t.created_at, t.id
+                """,
+                (run_id,),
+            ).fetchall()
+
+        run = dict(run_row)
+        run["tickers"] = json.loads(run.pop("tickers_json"))
+        run["metadata"] = json.loads(run.pop("metadata_json") or "{}")
+
+        trades = [dict(row) for row in trade_rows]
+
+        trades_by_trace: dict[str, list[dict[str, Any]]] = {}
+
+        for trade in trades:
+            trace_id = trade["trace_id"]
+            trades_by_trace.setdefault(trace_id, []).append(trade)
+
+        traces: list[dict[str, Any]] = []
+
+        successful_execution_count = 0
+        rejected_or_unexecuted_count = 0
+        invalid_trade_link_count = 0
+        execution_trade_mismatch_count = 0
+
+        for row in trace_rows:
+            trace_key = row["trace_key"]
+            trace_payload = json.loads(row["trace_json"])
+
+            normalized_trades = trades_by_trace.get(trace_key, [])
+
+            execution_success = row["execution_success"] == 1
+
+            if execution_success:
+                successful_execution_count += 1
+
+                if len(normalized_trades) != 1:
+                    invalid_trade_link_count += 1
+            else:
+                rejected_or_unexecuted_count += 1
+
+                if normalized_trades:
+                    invalid_trade_link_count += len(normalized_trades)
+
+            if execution_success and len(normalized_trades) == 1:
+                trade = normalized_trades[0]
+                execution = trace_payload.get("execution") or {}
+
+                fields_match = (
+                    trade["ticker"] == trace_payload.get("ticker")
+                    and trade["side"]
+                    == _normalize_execution_side(execution.get("side"))
+                    and trade["qty"] == execution.get("quantity")
+                    and trade["price"] == execution.get("price")
+                    and trade["order_id"] == execution.get("order_id")
+                )
+
+                if not fields_match:
+                    execution_trade_mismatch_count += 1
+
+            traces.append(
+                {
+                    "trace_key": trace_key,
+                    "tick_id": row["tick_id"],
+                    "ticker": row["ticker"],
+                    "simulated_date": row["simulated_date"],
+                    "outcome": row["outcome"],
+                    "execution_success": execution_success,
+                    "trace": trace_payload,
+                    "normalized_trades": normalized_trades,
+                }
+            )
+
+        persisted_trace_count = len(trace_rows)
+        normalized_trade_count = len(trades)
+
+        run_trace_count_matches = int(run["trade_trace_count"]) == persisted_trace_count
+
+        successful_execution_count_matches_trade_count = (
+            successful_execution_count == normalized_trade_count
+        )
+
+        rejected_traces_have_no_trade = all(
+            not item["normalized_trades"]
+            for item in traces
+            if not item["execution_success"]
+        )
+
+        successful_traces_have_exactly_one_trade = all(
+            len(item["normalized_trades"]) == 1
+            for item in traces
+            if item["execution_success"]
+        )
+
+        execution_fields_match_trade = execution_trade_mismatch_count == 0
+
+        no_invalid_trade_links = invalid_trade_link_count == 0
+
+        valid = all(
+            (
+                run_trace_count_matches,
+                successful_execution_count_matches_trade_count,
+                rejected_traces_have_no_trade,
+                successful_traces_have_exactly_one_trade,
+                execution_fields_match_trade,
+                no_invalid_trade_links,
+            )
+        )
+
+        return {
+            "run": run,
+            "summary": {
+                "trace_count": persisted_trace_count,
+                "successful_executions": successful_execution_count,
+                "normalized_trades": normalized_trade_count,
+                "rejected_or_unexecuted": rejected_or_unexecuted_count,
+            },
+            "traces": traces,
+            "trades": trades,
+            "invariants": {
+                "run_trace_count_matches": run_trace_count_matches,
+                "successful_execution_count_matches_trade_count": (
+                    successful_execution_count_matches_trade_count
+                ),
+                "rejected_traces_have_no_trade": (rejected_traces_have_no_trade),
+                "successful_traces_have_exactly_one_trade": (
+                    successful_traces_have_exactly_one_trade
+                ),
+                "execution_fields_match_trade": (execution_fields_match_trade),
+                "no_invalid_trade_links": no_invalid_trade_links,
+            },
+            "diagnostics": {
+                "invalid_trade_link_count": invalid_trade_link_count,
+                "execution_trade_mismatch_count": (execution_trade_mismatch_count),
+            },
+            "valid": valid,
+        }
+
     def delete_run(self, run_id: str) -> None:
         """Delete one run and its persisted trade traces."""
         with self._connection() as conn:

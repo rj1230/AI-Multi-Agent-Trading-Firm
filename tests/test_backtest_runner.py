@@ -8,9 +8,10 @@ Regression coverage for:
 3. Historical session discovery from OHLCV data.
 4. Multi-ticker TradeTrace coverage.
 5. Full BUY -> SELL -> closed-position lifecycle.
-6. Realized P&L calculation during historical replay.
-7. Final backtest state capture after dependency cleanup.
-8. Restoration of backtest singletons and simulated-date state.
+6. Partial SELL -> final SELL accounting lifecycle.
+7. Realized P&L calculation during historical replay.
+8. Final backtest state capture after dependency cleanup.
+9. Restoration of backtest singletons and simulated-date state.
 
 The historical-data fixtures intentionally respect the simulated-date/as-of
 boundary. This is critical for preventing lookahead bias and for ensuring
@@ -48,6 +49,8 @@ def _fake_historical_ohlcv(
     deterministic while position sizing, ticker-cap behavior, and
     TradeTrace coverage are tested.
     """
+
+    del lookback_days
 
     base_date = simulated_date.replace(
         hour=0,
@@ -137,6 +140,58 @@ def test_lookahead_guard_blocks_missing_simulated_date(monkeypatch):
                 "AAPL",
                 lookback_days=5,
             )
+    finally:
+        set_simulated_date(None)
+
+
+def test_backtest_historical_fixture_never_exposes_future_bars():
+    """
+    Historical OHLCV access must respect the simulated-date/as-of boundary.
+
+    For a simulated date T, every returned bar must satisfy:
+
+        bar.timestamp <= T
+
+    A future bar must therefore never be visible to the backtest decision
+    pipeline.
+
+    This is the positive counterpart to
+    test_lookahead_guard_blocks_missing_simulated_date():
+        - missing simulated date -> reject
+        - valid simulated date -> only historical/present bars are visible
+    """
+
+    from data_sources import fetch_ohlcv
+
+    simulated_date = datetime(
+        2026,
+        8,
+        4,
+        tzinfo=UTC,
+    )
+
+    set_simulated_date(simulated_date)
+
+    try:
+        series = _fake_historical_ohlcv(
+            ticker="AAPL",
+            simulated_date=simulated_date,
+            lookback_days=30,
+        )
+
+        assert series.as_of == simulated_date
+
+        assert series.bars
+
+        assert all(bar.timestamp <= simulated_date for bar in series.bars)
+
+        assert max(bar.timestamp for bar in series.bars) <= simulated_date
+
+        # Explicitly prove a future trading bar is not present.
+        future_date = simulated_date + timedelta(days=1)
+
+        assert all(bar.timestamp < future_date for bar in series.bars)
+
     finally:
         set_simulated_date(None)
 
@@ -751,6 +806,427 @@ def test_backtest_buy_then_sell_closes_position_and_realizes_pnl(
 
     # ---------------------------------------------------------------
     # Backtest dependency cleanup
+    # ---------------------------------------------------------------
+
+    assert nodes_module._ledger_singleton is saved_ledger
+    assert nodes_module._broker_singleton is saved_broker
+    assert nodes_module._risk_config_singleton is saved_config
+
+    assert get_simulated_date() is None
+
+
+def test_backtest_partial_sell_then_full_close_realizes_pnl(
+    tmp_path,
+    monkeypatch,
+):
+    """
+    Verify partial-close accounting across multiple historical sessions.
+
+    Session 1:
+        BUY 100 @ $100
+        -> 100 shares open
+
+    Session 2:
+        SELL 40 @ $110
+        -> 60 shares remain
+        -> position_state = partially_closed
+        -> incremental realized P&L = $400
+
+    Session 3:
+        SELL 60 @ $120
+        -> 0 shares remain
+        -> position_state = closed
+        -> incremental realized P&L = $1,200
+
+    Final portfolio:
+        cumulative realized P&L = $1,600
+        final cash = $101,600
+        final equity = $101,600
+
+    The test intentionally exercises the production long-only coordinator,
+    which clamps SELL quantity against the currently held position.
+
+    Closed-trade semantics:
+
+        result.closed_trades contains the final closing SELL event.
+
+    Therefore the closed-trade record contains:
+
+        shares       = 60
+        exit_price   = 120
+        average_cost = 100
+        realized_pnl = 1,200
+
+    Cumulative lifecycle P&L is exposed separately through
+    result.final_realized_pnl and is therefore $1,600.
+    """
+
+    monkeypatch.setenv(
+        "TRADING_MODE",
+        "backtest",
+    )
+
+    prices = {
+        "2026-08-01": 100.0,
+        "2026-08-02": 110.0,
+        "2026-08-03": 120.0,
+    }
+
+    def fake_historical_ohlcv(
+        ticker: str,
+        simulated_date: datetime,
+        lookback_days: int = 30,
+    ) -> OHLCVSeries:
+        """
+        Return only bars available at simulated_date.
+
+        This preserves the historical replay lookahead invariant.
+        """
+
+        del lookback_days
+
+        bars: list[OHLCVBar] = []
+
+        for date_key, price in prices.items():
+            timestamp = datetime.fromisoformat(date_key).replace(
+                tzinfo=UTC,
+            )
+
+            if timestamp > simulated_date:
+                continue
+
+            bars.append(
+                OHLCVBar(
+                    timestamp=timestamp,
+                    open=price,
+                    high=price + 1.0,
+                    low=price - 1.0,
+                    close=price,
+                    volume=1_000_000,
+                )
+            )
+
+        return OHLCVSeries(
+            ticker=ticker,
+            bars=bars,
+            source="test_fixture",
+            mode=DataSourceMode.BACKTEST,
+            as_of=simulated_date,
+        )
+
+    monkeypatch.setattr(
+        historical_module,
+        "fetch_ohlcv",
+        fake_historical_ohlcv,
+    )
+
+    def fake_signal(ticker: str) -> Signal:
+        del ticker
+
+        current = get_simulated_date()
+
+        assert current is not None
+
+        if current.date().isoformat() == "2026-08-01":
+            return Signal(
+                direction="bullish",
+                confidence=0.9,
+                rationale="test partial-close buy signal",
+            )
+
+        return Signal(
+            direction="bearish",
+            confidence=0.9,
+            rationale="test partial-close sell signal",
+        )
+
+    def fake_news_result(ticker: str) -> NewsAgentResult:
+        current = get_simulated_date()
+
+        assert current is not None
+
+        return NewsAgentResult(
+            signal=fake_signal(ticker),
+            availability=NewsAvailability.AVAILABLE,
+            article_count=1,
+            source="test_fixture",
+            as_of=current,
+        )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_news_agent_with_metadata",
+        fake_news_result,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_chart_agent",
+        fake_signal,
+    )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "compute_atr",
+        lambda bars: 10.0,
+    )
+
+    def fake_run_risk_agent(
+        merged,
+        ticker,
+        sector,
+        entry_price,
+        atr,
+        portfolio,
+        config,
+    ):
+        """
+        Return deterministic quantities so the real production coordinator
+        receives:
+
+            BUY 100
+            SELL 40
+            SELL 60
+
+        The coordinator, broker, ledger, and accounting remain production
+        implementations.
+        """
+
+        del (
+            merged,
+            ticker,
+            sector,
+            entry_price,
+            atr,
+            portfolio,
+            config,
+        )
+
+        current = get_simulated_date()
+
+        assert current is not None
+
+        quantities = {
+            "2026-08-01": 100.0,
+            "2026-08-02": 40.0,
+            "2026-08-03": 60.0,
+        }
+
+        date_key = current.date().isoformat()
+
+        return nodes_module.RiskAgentDecision(
+            approved=True,
+            ticker="AAPL",
+            proposed_shares=quantities[date_key],
+            raw_shares=quantities[date_key],
+            checks=[],
+        )
+
+    monkeypatch.setattr(
+        nodes_module,
+        "run_risk_agent",
+        fake_run_risk_agent,
+    )
+
+    saved_ledger = nodes_module._ledger_singleton
+    saved_broker = nodes_module._broker_singleton
+    saved_config = nodes_module._risk_config_singleton
+
+    from backtest.runner import run_backtest
+
+    result = run_backtest(
+        tickers=["AAPL"],
+        start_date="2026-08-01",
+        end_date="2026-08-03",
+        starting_equity=100_000.0,
+        ledger_path=str(tmp_path / "partial_close_ledger.json"),
+        tick_delay_seconds=0,
+    )
+
+    # ---------------------------------------------------------------
+    # Session discovery
+    # ---------------------------------------------------------------
+
+    assert len(result.tick_log) == 3
+
+    assert [entry["date"] for entry in result.tick_log] == [
+        "2026-08-01",
+        "2026-08-02",
+        "2026-08-03",
+    ]
+
+    # ---------------------------------------------------------------
+    # Session 1: BUY 100 @ $100
+    # ---------------------------------------------------------------
+
+    day1 = result.tick_log[0]
+
+    assert day1["execution_attempted"] is True
+    assert day1["execution_success"] is True
+    assert day1["execution_side"] == "buy"
+
+    assert day1["price"] == pytest.approx(100.0)
+
+    assert day1["proposed_shares"] == pytest.approx(100.0)
+
+    assert day1["remaining_shares"] == pytest.approx(
+        100.0,
+        abs=1e-9,
+    )
+
+    assert day1["position_closed"] is False
+    assert day1["position_state"] == "open"
+
+    # ---------------------------------------------------------------
+    # Session 2: SELL 40 @ $110
+    # ---------------------------------------------------------------
+
+    day2 = result.tick_log[1]
+
+    assert day2["execution_attempted"] is True
+    assert day2["execution_success"] is True
+    assert day2["execution_side"] == "sell"
+
+    assert day2["price"] == pytest.approx(110.0)
+
+    assert day2["proposed_shares"] == pytest.approx(40.0)
+
+    # Real coordinator/broker path must leave 60 shares.
+    assert day2["remaining_shares"] == pytest.approx(
+        60.0,
+        abs=1e-9,
+    )
+
+    # A partial SELL is NOT a closed position.
+    assert day2["position_closed"] is False
+    assert day2["position_state"] == "partially_closed"
+
+    # 40 * ($110 - $100) = $400
+    assert day2["realized_pnl"] == pytest.approx(
+        400.0,
+        rel=1e-6,
+    )
+
+    # ---------------------------------------------------------------
+    # Session 3: SELL remaining 60 @ $120
+    # ---------------------------------------------------------------
+
+    day3 = result.tick_log[2]
+
+    assert day3["execution_attempted"] is True
+    assert day3["execution_success"] is True
+    assert day3["execution_side"] == "sell"
+
+    assert day3["price"] == pytest.approx(120.0)
+
+    assert day3["proposed_shares"] == pytest.approx(60.0)
+
+    assert day3["remaining_shares"] == pytest.approx(
+        0.0,
+        abs=1e-9,
+    )
+
+    # Only the final SELL closes the position.
+    assert day3["position_closed"] is True
+    assert day3["position_state"] == "closed"
+
+    # 60 * ($120 - $100) = $1,200
+    assert day3["realized_pnl"] == pytest.approx(
+        1_200.0,
+        rel=1e-6,
+    )
+
+    # ---------------------------------------------------------------
+    # Closed-trade accounting
+    # ---------------------------------------------------------------
+
+    assert len(result.closed_trades) == 1
+
+    closed_trade = result.closed_trades[0]
+
+    assert closed_trade["ticker"] == "AAPL"
+    assert closed_trade["side"] == "sell"
+
+    # The closed trade represents the final closing SELL event.
+    assert closed_trade["shares"] == pytest.approx(
+        60.0,
+        rel=1e-6,
+    )
+
+    assert closed_trade["exit_price"] == pytest.approx(
+        120.0,
+    )
+
+    assert closed_trade["average_cost"] == pytest.approx(
+        100.0,
+        rel=1e-6,
+    )
+
+    # Final closing SELL event P&L:
+    #
+    #   60 * (120 - 100) = 1,200
+    #
+    # Cumulative lifecycle P&L is asserted separately through
+    # result.final_realized_pnl below.
+    assert closed_trade["realized_pnl"] == pytest.approx(
+        1_200.0,
+        rel=1e-6,
+    )
+
+    # ---------------------------------------------------------------
+    # Final portfolio state
+    # ---------------------------------------------------------------
+
+    assert result.final_positions == {}
+
+    # Cumulative realized P&L across both SELL events:
+    #
+    #   40 * (110 - 100) =   400
+    #   60 * (120 - 100) = 1,200
+    #   -------------------------
+    #                     = 1,600
+    assert result.final_realized_pnl == pytest.approx(
+        1_600.0,
+        rel=1e-6,
+    )
+
+    assert result.final_cash == pytest.approx(
+        101_600.0,
+        rel=1e-6,
+    )
+
+    assert result.final_equity == pytest.approx(
+        101_600.0,
+        rel=1e-6,
+    )
+
+    # equity_curve entries are (date, equity) tuples.
+    assert result.equity_curve[-1][1] == pytest.approx(
+        101_600.0,
+        rel=1e-6,
+    )
+
+    # ---------------------------------------------------------------
+    # Three executions:
+    #
+    #   1. BUY  100 @ 100
+    #   2. SELL  40 @ 110
+    #   3. SELL  60 @ 120
+    # ---------------------------------------------------------------
+
+    assert len(result.trades) == 3
+
+    assert result.trades[0]["execution_side"] == "buy"
+    assert result.trades[0]["price"] == pytest.approx(100.0)
+
+    assert result.trades[1]["execution_side"] == "sell"
+    assert result.trades[1]["price"] == pytest.approx(110.0)
+
+    assert result.trades[2]["execution_side"] == "sell"
+    assert result.trades[2]["price"] == pytest.approx(120.0)
+
+    # ---------------------------------------------------------------
+    # Singleton state must be restored after the backtest.
     # ---------------------------------------------------------------
 
     assert nodes_module._ledger_singleton is saved_ledger

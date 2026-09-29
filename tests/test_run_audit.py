@@ -157,6 +157,35 @@ def test_duplicate_trace_is_idempotent(audit_store):
     run = audit_store.get_run("run-001")
     assert run["trade_trace_count"] == 1
 
+    with audit_store._connection() as conn:
+        trades = conn.execute(
+            """
+            SELECT
+                trace_id,
+                ticker,
+                side,
+                qty,
+                price,
+                order_id,
+                status,
+                mode
+            FROM trades
+            WHERE trace_id = ?
+            """,
+            ("run-001:AAPL:2026-08-01T00:00:00+00:00:AAPL-2026-08-01",),
+        ).fetchall()
+
+    assert len(trades) == 1
+
+    trade = trades[0]
+    assert trade["ticker"] == "AAPL"
+    assert trade["side"] == "BUY"
+    assert trade["qty"] == pytest.approx(41.6667)
+    assert trade["price"] == pytest.approx(150.0)
+    assert trade["order_id"] == "order-001"
+    assert trade["status"] == "filled"
+    assert trade["mode"] == "backtest"
+
 
 def test_runs_are_isolated(audit_store):
     """Traces from different runs must not mix."""

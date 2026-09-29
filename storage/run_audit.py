@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from storage.db import get_connection, init_db
+from storage.db import get_connection, init_db, insert_trade
 from telemetry.trade_trace import TradeTrace
 
 
@@ -189,6 +189,33 @@ class RunAuditStore:
                     _isoformat(trace.timestamp),
                 ),
             )
+
+            if execution.get("success"):
+                existing_trade = conn.execute(
+                    """
+                    SELECT id
+                    FROM trades
+                    WHERE trace_id = ?
+                    LIMIT 1
+                    """,
+                    (trace_key,),
+                ).fetchone()
+
+                if existing_trade is None:
+                    insert_trade(
+                        conn,
+                        {
+                            "trace_id": trace_key,
+                            "ticker": trace.ticker,
+                            "side": _normalize_execution_side(execution.get("side")),
+                            "qty": execution.get("quantity"),
+                            "price": execution.get("price"),
+                            "order_id": execution.get("order_id"),
+                            "status": "filled",
+                            "mode": "backtest",
+                            "created_at": _isoformat(trace.timestamp),
+                        },
+                    )
 
             conn.execute(
                 """

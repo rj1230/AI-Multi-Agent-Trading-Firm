@@ -296,6 +296,322 @@ def result_to_dict(result):
 
 
 # ============================================================
+# OBSERVABILITY HELPERS
+# ============================================================
+
+
+def safe_int(value, default=0):
+    """Convert a value to int without raising on malformed telemetry."""
+    try:
+        if value is None:
+            return default
+
+        if isinstance(value, bool):
+            return int(value)
+
+        return int(float(value))
+
+    except (TypeError, ValueError):
+        return default
+
+
+def bool_or_none(value):
+    """Normalize common telemetry boolean representations."""
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return bool(value)
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+
+        if normalized in {
+            "true",
+            "1",
+            "yes",
+            "y",
+            "approved",
+            "success",
+            "filled",
+            "executed",
+            "mutated",
+        }:
+            return True
+
+        if normalized in {
+            "false",
+            "0",
+            "no",
+            "n",
+            "rejected",
+            "failed",
+            "blocked",
+            "held",
+            "unchanged",
+        }:
+            return False
+
+    return None
+
+
+def execution_success_from_summary(summary):
+    """Return the canonical execution-success state from UI telemetry."""
+    value = summary.get("execution_success")
+
+    normalized = bool_or_none(value)
+
+    if normalized is not None:
+        return normalized
+
+    return None
+
+
+def coordinator_approval_from_summary(summary):
+    """Return explicit coordinator approval when available."""
+    value = summary.get("coordinator_approved")
+
+    normalized = bool_or_none(value)
+
+    if normalized is not None:
+        return normalized
+
+    outcome = str(summary.get("outcome") or "").strip().lower()
+
+    if outcome == "executed":
+        return True
+
+    if outcome in {
+        "held_local_reject",
+        "held_book_reject",
+    }:
+        return False
+
+    return None
+
+
+def accounting_mutation_from_summary(summary):
+    """
+    Determine whether portfolio accounting actually mutated.
+
+    Explicit accounting telemetry takes precedence. Otherwise a
+    successful execution is treated as the compatibility fallback,
+    because successful fills mutate the portfolio ledger.
+    """
+    for key in (
+        "accounting_mutated",
+        "portfolio_mutated",
+        "ledger_mutated",
+        "accounting_mutation",
+    ):
+        if key in summary:
+            normalized = bool_or_none(summary.get(key))
+
+            if normalized is not None:
+                return normalized
+
+    execution_success = execution_success_from_summary(summary)
+
+    if execution_success is True:
+        return True
+
+    if execution_success is False:
+        return False
+
+    return None
+
+
+def build_run_observability(run_data):
+    """
+    Build presentation-only observability metrics for one backtest run.
+
+    This function does not modify strategy, risk, execution, accounting,
+    or persisted audit state.
+    """
+    if not isinstance(run_data, dict):
+        run_data = {}
+
+    tick_log = run_data.get("tick_log") or []
+
+    if not isinstance(tick_log, list):
+        tick_log = []
+
+    diagnostics = run_data.get("diagnostics") or {}
+
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+
+    traces = run_data.get("trade_traces") or []
+
+    if not isinstance(traces, list):
+        traces = []
+
+    trades = run_data.get("trades") or []
+
+    if not isinstance(trades, list):
+        trades = []
+
+    closed_trades_raw = run_data.get(
+        "closed_trades",
+        [],
+    )
+
+    if isinstance(
+        closed_trades_raw,
+        (list, tuple, dict),
+    ):
+        closed_trades = len(closed_trades_raw)
+    else:
+        closed_trades = safe_int(
+            closed_trades_raw,
+        )
+
+    # --------------------------------------------------------
+    # Trace count
+    # --------------------------------------------------------
+
+    trace_count = len(traces)
+
+    if trace_count == 0:
+        persisted_trace_count = diagnostics.get("trade_trace_count")
+
+        if persisted_trace_count is None:
+            persisted_trace_count = run_data.get("trade_trace_count")
+
+        trace_count = safe_int(
+            persisted_trace_count,
+            default=0,
+        )
+
+    ticks = len(tick_log)
+
+    trace_coverage = trace_count / ticks if ticks > 0 else None
+
+    if trace_coverage is not None:
+        trace_coverage = min(
+            max(trace_coverage, 0.0),
+            1.0,
+        )
+
+    # --------------------------------------------------------
+    # Risk
+    # --------------------------------------------------------
+
+    risk_approvals = safe_int(
+        diagnostics.get(
+            "risk_approvals",
+            0,
+        )
+    )
+
+    risk_rejections = safe_int(
+        diagnostics.get(
+            "risk_rejections",
+            0,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Execution
+    # --------------------------------------------------------
+
+    execution_attempts = safe_int(
+        diagnostics.get(
+            "execution_attempts",
+            0,
+        )
+    )
+
+    execution_failures = safe_int(
+        diagnostics.get(
+            "execution_failures",
+            0,
+        )
+    )
+
+    execution_successes = safe_int(
+        diagnostics.get(
+            "execution_successes",
+            max(
+                execution_attempts - execution_failures,
+                0,
+            ),
+        )
+    )
+
+    # --------------------------------------------------------
+    # Coordinator
+    # --------------------------------------------------------
+
+    coordinator_approvals = 0
+
+    coordinator_rejections = 0
+
+    coordinator_observed = False
+
+    for entry in tick_log:
+        if not isinstance(entry, dict):
+            continue
+
+        summary = paper_trade_result_summary(entry)
+
+        approval = coordinator_approval_from_summary(summary)
+
+        if approval is True:
+            coordinator_approvals += 1
+            coordinator_observed = True
+
+        elif approval is False:
+            coordinator_rejections += 1
+            coordinator_observed = True
+
+    # Prefer persisted diagnostics when explicitly available.
+    diagnostic_coordinator_approvals = diagnostics.get("coordinator_approvals")
+
+    if diagnostic_coordinator_approvals is not None:
+        coordinator_approvals = safe_int(diagnostic_coordinator_approvals)
+
+    diagnostic_coordinator_rejections = diagnostics.get("coordinator_rejections")
+
+    if diagnostic_coordinator_rejections is not None:
+        coordinator_rejections = safe_int(diagnostic_coordinator_rejections)
+
+    # --------------------------------------------------------
+    # Normalized trades
+    # --------------------------------------------------------
+
+    normalized_trades = len(trades)
+
+    diagnostic_trade_count = diagnostics.get("normalized_trades")
+
+    if diagnostic_trade_count is not None:
+        normalized_trades = safe_int(diagnostic_trade_count)
+
+    # --------------------------------------------------------
+    # Return canonical presentation metrics
+    # --------------------------------------------------------
+
+    return {
+        "ticks": ticks,
+        "traces": trace_count,
+        "trace_coverage": trace_coverage,
+        "risk_approvals": risk_approvals,
+        "risk_rejections": risk_rejections,
+        "coordinator_approvals": coordinator_approvals,
+        "coordinator_rejections": coordinator_rejections,
+        "execution_attempts": execution_attempts,
+        "execution_successes": execution_successes,
+        "execution_failures": execution_failures,
+        "normalized_trades": normalized_trades,
+        "closed_trades": closed_trades,
+        "coordinator_observed": coordinator_observed,
+    }
+
+
+# ============================================================
 # AGENTIC PAPER TRADE
 # ============================================================
 
@@ -3245,6 +3561,10 @@ with tab_dashboard:
 # DECISION EXPLORER
 # ============================================================
 
+# ============================================================
+# DECISION EXPLORER
+# ============================================================
+
 with tab_decisions:
     if not backtest_runs:
         st.info("No backtest results found.")
@@ -3260,6 +3580,7 @@ with tab_decisions:
             "Backtest run",
             backtest_runs,
             index=backtest_runs.index(default_run),
+            key="decision_run_selector",
         )
 
         run_data = load_run(selected_run)
@@ -3277,12 +3598,89 @@ with tab_decisions:
                 st.warning("This run does not contain tick telemetry.")
 
             else:
-                st.markdown(f"### {selected_run}")
+                st.markdown(f"### `{selected_run}`")
 
-                tickers = sorted({x.get("ticker") for x in tick_log if x.get("ticker")})
+                observability = build_run_observability(
+                    run_data,
+                )
+
+                # ------------------------------------------------
+                # RUN SUMMARY
+                # ------------------------------------------------
+
+                st.markdown("#### Run decision summary")
+
+                summary_kpis = [
+                    (
+                        "Ticks",
+                        observability["ticks"],
+                        "",
+                    ),
+                    (
+                        "TradeTraces",
+                        observability["traces"],
+                        "",
+                    ),
+                    (
+                        "Trace coverage",
+                        (
+                            f"{observability['trace_coverage']:.0%}"
+                            if observability["trace_coverage"] is not None
+                            else "—"
+                        ),
+                        (
+                            "green"
+                            if observability["trace_coverage"] == 1
+                            else "yellow"
+                            if observability["trace_coverage"] is not None
+                            else ""
+                        ),
+                    ),
+                    (
+                        "Execution success",
+                        observability["execution_successes"],
+                        ("green" if observability["execution_successes"] else ""),
+                    ),
+                ]
+
+                display_html(
+                    '<div class="kpi-grid four">'
+                    + "".join(
+                        f"""
+                        <div class="kpi">
+                            <div class="label">
+                                {esc(label)}
+                            </div>
+                            <div class="value {cls}">
+                                {esc(value)}
+                            </div>
+                        </div>
+                        """
+                        for label, value, cls in summary_kpis
+                    )
+                    + "</div>"
+                )
+
+                # ------------------------------------------------
+                # FILTERS
+                # ------------------------------------------------
+
+                st.markdown("#### Decision filters")
+
+                tickers = sorted(
+                    {
+                        str(entry.get("ticker"))
+                        for entry in tick_log
+                        if entry.get("ticker")
+                    }
+                )
 
                 outcomes = sorted(
-                    {x.get("outcome") for x in tick_log if x.get("outcome")}
+                    {
+                        str(entry.get("outcome"))
+                        for entry in tick_log
+                        if entry.get("outcome")
+                    }
                 )
 
                 c1, c2, c3 = st.columns(3)
@@ -3291,20 +3689,24 @@ with tab_decisions:
                     ticker_filter = st.selectbox(
                         "Ticker",
                         ["All"] + tickers,
+                        key="decision_ticker_filter",
                     )
 
                 with c2:
                     outcome_filter = st.selectbox(
                         "Outcome",
                         ["All"] + outcomes,
+                        key="decision_outcome_filter",
+                        format_func=outcome_label,
                     )
 
                 with c3:
                     show_latest = st.number_input(
                         "Events to show",
                         min_value=1,
-                        max_value=200,
+                        max_value=500,
                         value=20,
+                        key="decision_events_limit",
                     )
 
                 filtered = [
@@ -3321,19 +3723,200 @@ with tab_decisions:
 
                 visible = filtered[: int(show_latest)]
 
-                if visible:
+                if not visible:
+                    st.info("No decisions match the selected filters.")
+
+                else:
+                    # ------------------------------------------------
+                    # DECISION TABLE
+                    # ------------------------------------------------
+
+                    st.markdown("#### Decision timeline")
+
+                    decision_rows = []
+
+                    for entry in visible:
+                        summary = paper_trade_result_summary(
+                            entry,
+                        )
+
+                        execution_success = execution_success_from_summary(
+                            summary,
+                        )
+
+                        coordinator_approved = coordinator_approval_from_summary(
+                            summary,
+                        )
+
+                        accounting_mutation = accounting_mutation_from_summary(
+                            summary,
+                        )
+
+                        decision_rows.append(
+                            {
+                                "Date": entry.get(
+                                    "date",
+                                    entry.get(
+                                        "simulated_date",
+                                        "—",
+                                    ),
+                                ),
+                                "Ticker": entry.get(
+                                    "ticker",
+                                    "—",
+                                ),
+                                "Signal": str(
+                                    summary.get(
+                                        "signal_direction",
+                                        "—",
+                                    )
+                                    or "—"
+                                ).upper(),
+                                "Confidence": fmt_num(
+                                    summary.get(
+                                        "signal_confidence",
+                                    ),
+                                    3,
+                                ),
+                                "Risk": str(
+                                    summary.get(
+                                        "risk_decision",
+                                        "—",
+                                    )
+                                    or "—"
+                                ).upper(),
+                                "Coordinator": (
+                                    "APPROVED"
+                                    if coordinator_approved is True
+                                    else "REJECTED"
+                                    if coordinator_approved is False
+                                    else "—"
+                                ),
+                                "Execution": (
+                                    "FILLED"
+                                    if execution_success is True
+                                    else "FAILED"
+                                    if execution_success is False
+                                    else "NOT ATTEMPTED"
+                                ),
+                                "Accounting": (
+                                    "MUTATED"
+                                    if accounting_mutation is True
+                                    else "UNCHANGED"
+                                    if accounting_mutation is False
+                                    else "—"
+                                ),
+                                "Outcome": outcome_label(
+                                    entry.get("outcome"),
+                                ),
+                            }
+                        )
+
+                    st.dataframe(
+                        decision_rows,
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+                    # ------------------------------------------------
+                    # TRACE INSPECTOR
+                    # ------------------------------------------------
+
+                    st.markdown("#### Decision inspector")
+
                     selected_index = st.selectbox(
                         "Inspect decision",
                         range(len(visible)),
                         format_func=lambda i: (
-                            f"{visible[i].get('date', '—')} · "
-                            f"{visible[i].get('ticker', '—')} · "
-                            f"{outcome_label(visible[i].get('outcome'))}"
+                            f"{visible[i].get('date', visible[i].get('simulated_date', '—'))}"
+                            f" · {visible[i].get('ticker', '—')}"
+                            f" · {outcome_label(visible[i].get('outcome'))}"
                         ),
+                        key="decision_trace_selector",
                     )
 
-                    render_decision(visible[selected_index])
+                    render_decision(
+                        visible[selected_index],
+                    )
 
+                    # ------------------------------------------------
+                    # DECISION DISTRIBUTION
+                    # ------------------------------------------------
+
+                    st.markdown("#### Decision distribution")
+
+                    reason_counts = extract_decision_reasons(
+                        {
+                            **run_data,
+                            "tick_log": visible,
+                        }
+                    )
+
+                    render_decision_reasons(
+                        reason_counts,
+                        total_ticks=len(visible),
+                    )
+
+                    # ------------------------------------------------
+                    # OBSERVABILITY DETAILS
+                    # ------------------------------------------------
+
+                    with st.expander(
+                        "Run observability",
+                        expanded=False,
+                    ):
+                        observability_rows = [
+                            {
+                                "Metric": "Ticks",
+                                "Value": str(observability["ticks"]),
+                            },
+                            {
+                                "Metric": "TradeTraces",
+                                "Value": str(observability["traces"]),
+                            },
+                            {
+                                "Metric": "Trace coverage",
+                                "Value": (
+                                    f"{observability['trace_coverage']:.0%}"
+                                    if observability["trace_coverage"] is not None
+                                    else "—"
+                                ),
+                            },
+                            {
+                                "Metric": "Risk approvals",
+                                "Value": str(observability["risk_approvals"]),
+                            },
+                            {
+                                "Metric": "Coordinator approvals",
+                                "Value": str(observability["coordinator_approvals"]),
+                            },
+                            {
+                                "Metric": "Execution attempts",
+                                "Value": str(observability["execution_attempts"]),
+                            },
+                            {
+                                "Metric": "Execution successes",
+                                "Value": str(observability["execution_successes"]),
+                            },
+                            {
+                                "Metric": "Execution failures",
+                                "Value": str(observability["execution_failures"]),
+                            },
+                            {
+                                "Metric": "Normalized trades",
+                                "Value": str(observability["normalized_trades"]),
+                            },
+                            {
+                                "Metric": "Closed trades",
+                                "Value": str(observability["closed_trades"]),
+                            },
+                        ]
+
+                        st.dataframe(
+                            observability_rows,
+                            width="stretch",
+                            hide_index=True,
+                        )
 
 # ============================================================
 # BACKTEST LAB
@@ -3884,7 +4467,6 @@ with tab_paper:
             hide_index=True,
         )
 
-
 # ============================================================
 # RUN AUDIT
 # ============================================================
@@ -3894,7 +4476,8 @@ with tab_audit:
 
     st.caption(
         "SQLite-backed audit history for reproducible trading "
-        "decisions, execution outcomes, and portfolio accounting."
+        "decisions, execution outcomes, portfolio accounting, "
+        "and deterministic audit reconstruction."
     )
 
     audit_runs = list_audit_runs(str(AUDIT_DB_PATH))
@@ -3951,17 +4534,18 @@ with tab_audit:
             )
 
             starting_equity = run.get("starting_equity")
-
             final_equity = run.get("final_equity")
-
             realized_pnl = run.get("realized_pnl")
-
             benchmark_return = run.get("benchmark_return")
 
             trace_count = run.get("trade_trace_count")
 
             if trace_count is None:
                 trace_count = len(traces)
+
+            # ------------------------------------------------
+            # RUN SUMMARY
+            # ------------------------------------------------
 
             summary = [
                 (
@@ -4091,6 +4675,190 @@ with tab_audit:
                 """
             )
 
+            st.caption(
+                "JSON reconciliation is optional. "
+                "SQLite reconstruction below is the persistent "
+                "audit source for this run."
+            )
+
+            # ------------------------------------------------
+            # PHASE-6 AUDIT RECONSTRUCTION
+            # ------------------------------------------------
+
+            st.markdown("#### Audit reconstruction")
+
+            try:
+                from storage.run_audit import RunAuditStore
+
+                reconstructed_audit = RunAuditStore().get_run_audit(selected_audit_run)
+
+                reconstruction_valid = bool(reconstructed_audit.get("valid"))
+
+                reconstruction_summary = reconstructed_audit.get("summary") or {}
+
+                reconstruction_invariants = reconstructed_audit.get("invariants") or {}
+
+                reconstruction_diagnostics = (
+                    reconstructed_audit.get("diagnostics") or {}
+                )
+
+                reconstruction_status = "VALID" if reconstruction_valid else "INVALID"
+
+                reconstruction_class = (
+                    "audit-ok" if reconstruction_valid else "audit-warning"
+                )
+
+                # --------------------------------------------
+                # RECONSTRUCTION STATUS
+                # --------------------------------------------
+
+                display_html(
+                    f"""
+                    <div class="reason-box">
+                        <strong>SQLite reconstruction:</strong>
+                        <span class="{reconstruction_class}">
+                            {esc(reconstruction_status)}
+                        </span>
+                        <br/>
+                        <strong>Source:</strong>
+                        runs → trade_traces → trades
+                        <br/>
+                        <strong>Trace records:</strong>
+                        {
+                        esc(
+                            reconstruction_summary.get(
+                                "trace_count",
+                                0,
+                            )
+                        )
+                    }
+                        <br/>
+                        <strong>Successful executions:</strong>
+                        {
+                        esc(
+                            reconstruction_summary.get(
+                                "successful_executions",
+                                0,
+                            )
+                        )
+                    }
+                        <br/>
+                        <strong>Normalized trades:</strong>
+                        {
+                        esc(
+                            reconstruction_summary.get(
+                                "normalized_trades",
+                                0,
+                            )
+                        )
+                    }
+                        <br/>
+                        <strong>Rejected / unexecuted:</strong>
+                        {
+                        esc(
+                            reconstruction_summary.get(
+                                "rejected_or_unexecuted",
+                                0,
+                            )
+                        )
+                    }
+                    </div>
+                    """
+                )
+
+                # --------------------------------------------
+                # INVARIANTS + DIAGNOSTICS
+                # --------------------------------------------
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    st.markdown("**Reconstruction invariants**")
+
+                    invariant_rows = [
+                        {
+                            "Invariant": key,
+                            "Result": ("PASS" if value is True else "FAIL"),
+                        }
+                        for key, value in reconstruction_invariants.items()
+                    ]
+
+                    if invariant_rows:
+                        st.table(invariant_rows)
+
+                    else:
+                        st.caption("No reconstruction invariants returned.")
+
+                with c2:
+                    st.markdown("**Reconstruction diagnostics**")
+
+                    diagnostic_rows = [
+                        {
+                            "Metric": key,
+                            "Value": str(value),
+                        }
+                        for key, value in reconstruction_diagnostics.items()
+                    ]
+
+                    if diagnostic_rows:
+                        st.table(diagnostic_rows)
+
+                    else:
+                        st.caption("No reconstruction diagnostics.")
+
+                # --------------------------------------------
+                # NORMALIZED TRADE LEDGER
+                # --------------------------------------------
+
+                reconstructed_trades = reconstructed_audit.get("trades") or []
+
+                if reconstructed_trades:
+                    st.markdown("**Normalized trade ledger**")
+
+                    trade_rows = [
+                        {
+                            "Ticker": trade.get(
+                                "ticker",
+                                "—",
+                            ),
+                            "Side": str(
+                                trade.get(
+                                    "side",
+                                    "—",
+                                )
+                            ).upper(),
+                            "Quantity": fmt_shares(trade.get("qty")),
+                            "Price": fmt_money(trade.get("price")),
+                            "Order ID": trade.get(
+                                "order_id",
+                                "—",
+                            ),
+                            "Status": trade.get(
+                                "status",
+                                "—",
+                            ),
+                            "Mode": trade.get(
+                                "mode",
+                                "—",
+                            ),
+                        }
+                        for trade in reconstructed_trades
+                    ]
+
+                    st.table(trade_rows)
+
+                else:
+                    st.caption("No normalized trades were reconstructed for this run.")
+
+                # --------------------------------------------
+                # RAW RECONSTRUCTION
+                # --------------------------------------------
+
+                with st.expander("Raw reconstructed audit"):
+                    st.json(reconstructed_audit)
+
+            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                st.error("SQLite audit reconstruction failed: " + str(exc))
             # ------------------------------------------------
             # RUN METADATA
             # ------------------------------------------------
@@ -4161,11 +4929,7 @@ with tab_audit:
                 },
             ]
 
-            st.dataframe(
-                lifecycle_rows,
-                width="stretch",
-                hide_index=True,
-            )
+            st.table(lifecycle_rows)
 
             # ------------------------------------------------
             # TRACE FILTERS
@@ -4259,11 +5023,7 @@ with tab_audit:
                     for trace in filtered_traces
                 ]
 
-                st.dataframe(
-                    rows,
-                    width="stretch",
-                    hide_index=True,
-                )
+                st.table(rows)
 
                 if filtered_traces:
                     selected_trace_index = st.selectbox(
@@ -4419,11 +5179,7 @@ with tab_audit:
                             },
                         ]
 
-                        st.dataframe(
-                            news_rows,
-                            width="stretch",
-                            hide_index=True,
-                        )
+                        st.table(news_rows)
 
                     with c2:
                         st.markdown("**ChartAgent**")
@@ -4451,11 +5207,7 @@ with tab_audit:
                             },
                         ]
 
-                        st.dataframe(
-                            chart_rows,
-                            width="stretch",
-                            hide_index=True,
-                        )
+                        st.table(chart_rows)
 
                     # ------------------------------------------------
                     # EXECUTION DETAILS
@@ -4496,11 +5248,7 @@ with tab_audit:
                         },
                     ]
 
-                    st.dataframe(
-                        execution_rows,
-                        width="stretch",
-                        hide_index=True,
-                    )
+                    st.table(execution_rows)
 
                     # ------------------------------------------------
                     # ACCOUNTING
@@ -4527,11 +5275,7 @@ with tab_audit:
                         },
                     ]
 
-                    st.dataframe(
-                        accounting_rows,
-                        width="stretch",
-                        hide_index=True,
-                    )
+                    st.table(accounting_rows)
 
                     # ------------------------------------------------
                     # RISK CHECKS
@@ -4551,6 +5295,48 @@ with tab_audit:
                     with st.expander("Raw persisted TradeTrace"):
                         st.json(trace)
 
+                    # ------------------------------------------------
+                    # AUDIT INTERPRETATION
+                    # ------------------------------------------------
+
+                    st.markdown("#### Audit interpretation")
+
+                    execution_attempted = bool_or_none(trace.get("execution_attempted"))
+
+                    execution_success = bool_or_none(trace.get("execution_success"))
+
+                    coordinator_approved = bool_or_none(
+                        trace.get("coordinator_approved")
+                    )
+
+                    if execution_success is True:
+                        audit_interpretation = (
+                            "Execution succeeded and the "
+                            "execution event is represented in "
+                            "the normalized trade ledger."
+                        )
+
+                    elif execution_attempted is True:
+                        audit_interpretation = (
+                            "Execution was attempted but did "
+                            "not produce a successful execution."
+                        )
+
+                    elif coordinator_approved is False:
+                        audit_interpretation = (
+                            "The coordinator blocked the decision "
+                            "before execution. No broker execution "
+                            "should be inferred from this trace."
+                        )
+
+                    else:
+                        audit_interpretation = (
+                            "The persisted trace records a decision "
+                            "that did not result in a successful "
+                            "execution."
+                        )
+
+                    st.info(audit_interpretation)
 
 # ============================================================
 # DATA & SYSTEM

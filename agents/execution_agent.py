@@ -7,9 +7,11 @@ carrying out an already-approved instruction.
 
 Retries once on failure (network blip, broker timeout), then falls back to
 a logged hold rather than silently losing the trade or retrying forever.
-The client_order_id passed to the broker makes that retry safe: see
-broker/sim_broker.py and broker/alpaca_broker.py for how each broker
-prevents a retried submission from becoming a double fill.
+
+The client_order_id is scoped to the logical execution context
+(run_id + tick_id + ticker + side + quantity), making retries of the same
+logical execution idempotent while allowing legitimate executions from
+different ticks or runs.
 """
 
 from __future__ import annotations
@@ -41,6 +43,9 @@ def run_execution_agent(
     merged_signal: MergedSignal,
     broker: Broker,
     max_retries: int = 1,
+    *,
+    run_id: str | None = None,
+    tick_id: int | None = None,
 ) -> ExecutionResult:
     if not risk_decision.approved:
         return ExecutionResult(
@@ -51,12 +56,24 @@ def run_execution_agent(
         )
 
     side = _direction_to_side(merged_signal.direction)
-    # Deterministic per-decision id: the same (approved) decision retried
-    # produces the same client_order_id, which is what makes the retry
-    # loop below safe against double-submission.
-    client_order_id = f"{risk_decision.ticker}-{merged_signal.direction}-{risk_decision.proposed_shares}"
+
+    # Scope the client order ID to the logical execution context.
+    #
+    # Same run + same tick + same order:
+    #     -> same client_order_id -> idempotent retry
+    #
+    # Different tick or different run:
+    #     -> different client_order_id -> legitimate new execution
+    client_order_id = (
+        f"{run_id or 'standalone'}:"
+        f"{tick_id if tick_id is not None else 'na'}:"
+        f"{risk_decision.ticker}:"
+        f"{side}:"
+        f"{risk_decision.proposed_shares}"
+    )
 
     last_error = "unknown error"
+
     for attempt in range(max_retries + 1):
         try:
             order = broker.submit_order(
@@ -77,7 +94,10 @@ def run_execution_agent(
             ticker=risk_decision.ticker,
             executed=True,
             order=order,
-            notes=f"Order {order.order_id} {order.status} for {order.qty} shares of {order.ticker}.",
+            notes=(
+                f"Order {order.order_id} {order.status} "
+                f"for {order.qty} shares of {order.ticker}."
+            ),
         )
 
     return ExecutionResult(
@@ -85,7 +105,7 @@ def run_execution_agent(
         executed=False,
         order=None,
         notes=(
-            f"Execution failed after {max_retries + 1} attempt(s): {last_error}. "
-            "Falling back to hold."
+            f"Execution failed after {max_retries + 1} attempt(s): "
+            f"{last_error}. Falling back to hold."
         ),
     )

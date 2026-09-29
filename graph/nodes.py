@@ -466,6 +466,8 @@ def execution_agent_node(
         risk_decision,
         merged,
         broker,
+        run_id=state.run_id,
+        tick_id=state.tick_id,
     )
 
     # --------------------------------------------------------------

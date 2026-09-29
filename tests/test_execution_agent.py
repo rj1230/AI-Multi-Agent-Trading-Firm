@@ -16,13 +16,22 @@ def _approved_decision(ticker="AAPL", shares=10.0):
 
 def _bullish_signal():
     return MergedSignal(
-        direction="bullish", combined_confidence=0.7, agreement=True, rationale="test"
+        direction="bullish",
+        combined_confidence=0.7,
+        agreement=True,
+        rationale="test",
     )
 
 
 def test_approved_decision_executes_via_broker():
     broker = SimBroker(starting_cash=10_000.0, price_lookup=lambda t: 100.0)
-    result = run_execution_agent(_approved_decision(), _bullish_signal(), broker)
+
+    result = run_execution_agent(
+        _approved_decision(),
+        _bullish_signal(),
+        broker,
+    )
+
     assert result.executed is True
     assert result.order.status == "filled"
     assert "AAPL" in broker.get_positions()
@@ -30,12 +39,23 @@ def test_approved_decision_executes_via_broker():
 
 def test_bearish_signal_maps_to_sell_side():
     broker = SimBroker(starting_cash=10_000.0, price_lookup=lambda t: 100.0)
-    broker.submit_order("AAPL", "buy", 10)  # something to sell
+    broker.submit_order("AAPL", "buy", 10)
+
     decision = _approved_decision(shares=5.0)
+
     bearish = MergedSignal(
-        direction="bearish", combined_confidence=0.6, agreement=True, rationale="x"
+        direction="bearish",
+        combined_confidence=0.6,
+        agreement=True,
+        rationale="x",
     )
-    result = run_execution_agent(decision, bearish, broker)
+
+    result = run_execution_agent(
+        decision,
+        bearish,
+        broker,
+    )
+
     assert result.order.side == "sell"
 
 
@@ -48,11 +68,23 @@ def test_unapproved_decision_is_never_sent_to_broker():
         approved=False,
         ticker="AAPL",
         proposed_shares=0.0,
-        checks=[RiskCheckResult(rule="circuit_breaker", passed=False, note="halted")],
+        checks=[
+            RiskCheckResult(
+                rule="circuit_breaker",
+                passed=False,
+                note="halted",
+            )
+        ],
     )
-    result = run_execution_agent(rejected, _bullish_signal(), ExplodesIfCalled())
+
+    result = run_execution_agent(
+        rejected,
+        _bullish_signal(),
+        ExplodesIfCalled(),
+    )
+
     assert result.executed is False
-    assert "not approve" in result.notes.lower() or "not approve" in result.notes
+    assert "not approve" in result.notes.lower()
 
 
 class _FlakyThenOkBroker:
@@ -60,11 +92,15 @@ class _FlakyThenOkBroker:
 
     def __init__(self):
         self.calls = 0
+        self.client_order_ids = []
 
     def submit_order(self, ticker, side, qty, client_order_id=None):
         self.calls += 1
+        self.client_order_ids.append(client_order_id)
+
         if self.calls == 1:
             raise ConnectionError("simulated timeout")
+
         return OrderResult(
             order_id="X1",
             ticker=ticker,
@@ -83,11 +119,21 @@ class _FlakyThenOkBroker:
 
 def test_retries_once_after_transient_failure_then_succeeds():
     broker = _FlakyThenOkBroker()
+
     result = run_execution_agent(
-        _approved_decision(), _bullish_signal(), broker, max_retries=1
+        _approved_decision(),
+        _bullish_signal(),
+        broker,
+        max_retries=1,
+        run_id="run-1",
+        tick_id=1,
     )
+
     assert result.executed is True
     assert broker.calls == 2
+
+    # Retry must reuse the exact same logical client order identity.
+    assert broker.client_order_ids[0] == broker.client_order_ids[1]
 
 
 class _AlwaysRejectsBroker:
@@ -110,21 +156,115 @@ class _AlwaysRejectsBroker:
 
 def test_falls_back_to_hold_after_exhausting_retries():
     broker = _AlwaysRejectsBroker()
+
     result = run_execution_agent(
-        _approved_decision(), _bullish_signal(), broker, max_retries=1
+        _approved_decision(),
+        _bullish_signal(),
+        broker,
+        max_retries=1,
+        run_id="run-1",
+        tick_id=1,
     )
+
     assert result.executed is False
     assert result.order is None
     assert "fall" in result.notes.lower()
 
 
-def test_duplicate_client_order_id_prevents_double_submit_end_to_end():
-    """Same approved decision run through ExecutionAgent twice (e.g. a
-    retried graph node) must not double-fill, because both calls generate
-    the same client_order_id."""
-    broker = SimBroker(starting_cash=10_000.0, price_lookup=lambda t: 100.0)
+def test_same_logical_execution_is_idempotent():
+    """Same run/tick execution must not double-fill."""
+
+    broker = SimBroker(
+        starting_cash=10_000.0,
+        price_lookup=lambda t: 100.0,
+    )
+
     decision = _approved_decision()
     signal = _bullish_signal()
-    run_execution_agent(decision, signal, broker)
-    run_execution_agent(decision, signal, broker)
-    assert broker.get_positions()["AAPL"].qty == 10  # not 20
+
+    run_execution_agent(
+        decision,
+        signal,
+        broker,
+        run_id="run-1",
+        tick_id=1,
+    )
+
+    run_execution_agent(
+        decision,
+        signal,
+        broker,
+        run_id="run-1",
+        tick_id=1,
+    )
+
+    assert broker.get_positions()["AAPL"].qty == 10
+    assert broker.cash == 9_000.0
+
+
+def test_different_ticks_allow_legitimate_separate_executions():
+    """Different ticks represent distinct logical executions."""
+
+    broker = SimBroker(
+        starting_cash=10_000.0,
+        price_lookup=lambda t: 100.0,
+    )
+
+    decision = _approved_decision()
+    signal = _bullish_signal()
+
+    first = run_execution_agent(
+        decision,
+        signal,
+        broker,
+        run_id="run-1",
+        tick_id=1,
+    )
+
+    second = run_execution_agent(
+        decision,
+        signal,
+        broker,
+        run_id="run-1",
+        tick_id=2,
+    )
+
+    assert first.executed is True
+    assert second.executed is True
+    assert first.order.order_id != second.order.order_id
+    assert broker.get_positions()["AAPL"].qty == 20
+    assert broker.cash == 8_000.0
+
+
+def test_different_runs_allow_legitimate_separate_executions():
+    """Different runs must not share an idempotency key."""
+
+    broker = SimBroker(
+        starting_cash=10_000.0,
+        price_lookup=lambda t: 100.0,
+    )
+
+    decision = _approved_decision()
+    signal = _bullish_signal()
+
+    first = run_execution_agent(
+        decision,
+        signal,
+        broker,
+        run_id="run-1",
+        tick_id=1,
+    )
+
+    second = run_execution_agent(
+        decision,
+        signal,
+        broker,
+        run_id="run-2",
+        tick_id=1,
+    )
+
+    assert first.executed is True
+    assert second.executed is True
+    assert first.order.order_id != second.order.order_id
+    assert broker.get_positions()["AAPL"].qty == 20
+    assert broker.cash == 8_000.0

@@ -19,6 +19,7 @@ dependencies = [
     "langchain-protocol==0.0.18",
     "langchain-tavily==0.2.18",
     "langchain-text-splitters==1.1.2",
+    "nemoguardrails>=0.24.1",
     "pandas>=3.0.5",
     "plotly>=7.0.0",
     "pydantic>=2.13,<3",

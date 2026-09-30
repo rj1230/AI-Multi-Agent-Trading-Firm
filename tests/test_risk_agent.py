@@ -35,6 +35,16 @@ def bullish_signal():
 
 
 @pytest.fixture
+def bearish_signal():
+    return MergedSignal(
+        direction="bearish",
+        combined_confidence=0.65,
+        agreement=True,
+        rationale="test sell",
+    )
+
+
+@pytest.fixture
 def clean_portfolio():
     return PortfolioSnapshot(
         equity=100_000.0,
@@ -92,6 +102,63 @@ def test_clean_trade_is_approved_with_correct_sizing(
         decision.proposed_shares,
         rel=1e-6,
     )
+
+
+def test_bearish_signal_sells_existing_long_position(
+    config,
+    bearish_signal,
+):
+    portfolio = PortfolioSnapshot(
+        equity=100_000.0,
+        starting_equity=100_000.0,
+        positions={
+            "AAPL": Position(
+                ticker="AAPL",
+                shares=100.0,
+                sector="Tech",
+                market_value=10_000.0,
+            )
+        },
+    )
+
+    decision = run_risk_agent(
+        bearish_signal,
+        "AAPL",
+        "Tech",
+        100.0,
+        2.0,
+        portfolio,
+        config,
+    )
+
+    assert decision.approved is True
+    assert decision.proposed_shares == pytest.approx(100.0)
+    assert decision.raw_shares == pytest.approx(100.0)
+
+
+def test_bearish_signal_rejects_without_existing_position(
+    config,
+    bearish_signal,
+    clean_portfolio,
+):
+    decision = run_risk_agent(
+        bearish_signal,
+        "AAPL",
+        "Tech",
+        100.0,
+        2.0,
+        clean_portfolio,
+        config,
+    )
+
+    assert decision.approved is False
+    assert decision.proposed_shares == pytest.approx(0.0)
+
+    rejection = next(
+        check for check in decision.checks if check.rule == "signal_direction"
+    )
+
+    assert "no existing" in rejection.note.lower()
 
 
 def test_circuit_breaker_blocks_trade_on_bad_day(

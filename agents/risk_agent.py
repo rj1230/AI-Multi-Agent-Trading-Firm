@@ -460,6 +460,142 @@ def run_risk_agent(
             checks=checks,
         )
 
+        # -------------------------------------------------------------------------
+    # Bearish signals are SELLs in the v1 long-only strategy.
+    #
+    # SELL reduces existing exposure, so BUY-oriented position sizing and
+    # exposure-cap room calculations must not be applied here.
+    # -------------------------------------------------------------------------
+
+    if merged_signal.direction == "bearish":
+        existing_position = portfolio.positions.get(ticker)
+
+        if existing_position is None or existing_position.shares <= 0:
+            checks.append(
+                RiskCheckResult(
+                    rule="signal_direction",
+                    passed=False,
+                    note=(
+                        f"Long-only SELL rejected: no existing "
+                        f"{ticker} position to sell."
+                    ),
+                )
+            )
+
+            return RiskDecision(
+                approved=False,
+                ticker=ticker,
+                proposed_shares=0.0,
+                raw_shares=0.0,
+                checks=checks,
+            )
+
+        sell_shares = round(
+            existing_position.shares,
+            4,
+        )
+
+        checks.append(
+            RiskCheckResult(
+                rule="signal_direction",
+                passed=True,
+                note=(
+                    f"Bearish signal -> SELL {sell_shares:.4f} "
+                    f"{ticker} shares from the existing long position."
+                ),
+            )
+        )
+
+        checks.append(
+            RiskCheckResult(
+                rule="position_sizing",
+                passed=True,
+                note=(
+                    f"SELL sizing: {sell_shares:.4f} existing shares "
+                    f"eligible for exit; BUY exposure-cap sizing "
+                    f"is not applied to a reducing trade."
+                ),
+            )
+        )
+
+        return RiskDecision(
+            approved=all(check.passed for check in checks),
+            ticker=ticker,
+            proposed_shares=sell_shares,
+            raw_shares=sell_shares,
+            checks=checks,
+        )
+
+        # -------------------------------------------------------------------------
+    # Bearish signals are SELLs in the v1 long-only strategy.
+    #
+    # A SELL reduces existing exposure, so BUY-oriented position sizing and
+    # exposure-cap room calculations must not be applied.
+    # -------------------------------------------------------------------------
+
+    if merged_signal.direction == "bearish":
+        existing_position = portfolio.positions.get(ticker)
+
+        if existing_position is None or existing_position.shares <= 0:
+            checks.append(
+                RiskCheckResult(
+                    rule="signal_direction",
+                    passed=False,
+                    note=(
+                        f"Long-only SELL rejected: no existing "
+                        f"{ticker} position to sell."
+                    ),
+                )
+            )
+
+            return RiskDecision(
+                approved=False,
+                ticker=ticker,
+                proposed_shares=0.0,
+                raw_shares=0.0,
+                checks=checks,
+            )
+
+        sell_shares = round(
+            existing_position.shares,
+            4,
+        )
+
+        checks.append(
+            RiskCheckResult(
+                rule="signal_direction",
+                passed=True,
+                note=(
+                    f"Bearish signal -> SELL {sell_shares:.4f} "
+                    f"{ticker} shares from the existing long position."
+                ),
+            )
+        )
+
+        checks.append(
+            RiskCheckResult(
+                rule="position_sizing",
+                passed=True,
+                note=(
+                    f"SELL sizing: {sell_shares:.4f} existing shares "
+                    f"eligible for exit; BUY exposure-cap sizing "
+                    f"is not applied to a reducing trade."
+                ),
+            )
+        )
+
+        return RiskDecision(
+            approved=all(check.passed for check in checks),
+            ticker=ticker,
+            proposed_shares=sell_shares,
+            raw_shares=sell_shares,
+            checks=checks,
+        )
+
+    # -------------------------------------------------------------------------
+    # Raw risk-based sizing
+    # -------------------------------------------------------------------------
+
     # -------------------------------------------------------------------------
     # Raw risk-based sizing
     # -------------------------------------------------------------------------

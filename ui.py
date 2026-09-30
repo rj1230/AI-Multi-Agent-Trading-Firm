@@ -653,6 +653,36 @@ def run_agentic_paper_trade(
     return run_id, result
 
 
+def run_historical_lifecycle_demo(
+    ticker: str,
+    start_date: date,
+    end_date: date,
+):
+    """
+    Run a short historical replay through the canonical backtest pipeline.
+
+    This is a recruiter/demo presentation layer over run_backtest().
+    It does not implement a second trading path.
+    """
+    from backtest.runner import run_backtest
+
+    run_id = (
+        f"lifecycle_{ticker}_{start_date.isoformat()}_"
+        f"{end_date.isoformat()}_{uuid.uuid4().hex[:8]}"
+    )
+
+    with trace_context():
+        result = run_backtest(
+            tickers=[ticker],
+            start_date=str(start_date),
+            end_date=str(end_date),
+            tick_delay_seconds=0,
+            run_id=run_id,
+        )
+
+    return run_id, result
+
+
 def paper_trade_result_summary(result):
     """Extract presentation fields from TickResult."""
     return {
@@ -4613,7 +4643,6 @@ with tab_audit:
                 )
                 + "</div>"
             )
-
             # ------------------------------------------------
             # JSON ↔ SQLITE RECONCILIATION
             # ------------------------------------------------
@@ -4627,14 +4656,17 @@ with tab_audit:
             if json_path.exists():
                 json_run = load_run(json_path.name)
 
-            json_trace_count = (
-                len(
-                    json_run.get(
-                        "tick_log",
-                        [],
-                    )
-                )
-                if json_run
+            json_trace_count = len(json_run.get("tick_log", [])) if json_run else None
+
+            json_diagnostics = json_run.get("diagnostics", {}) if json_run else {}
+
+            json_diagnostic_trace_count = (
+                json_diagnostics.get("trade_trace_count") if json_diagnostics else None
+            )
+
+            json_trace_coverage = (
+                json_diagnostics.get("trace_coverage_complete")
+                if json_diagnostics
                 else None
             )
 
@@ -4667,6 +4699,24 @@ with tab_audit:
                     <strong>SQLite TradeTrace records:</strong>
                     {esc(sqlite_trace_count)}
                     <br/>
+                    <strong>JSON diagnostic traces:</strong>
+                    {
+                    esc(
+                        json_diagnostic_trace_count
+                        if json_diagnostic_trace_count is not None
+                        else "—"
+                    )
+                }
+                    <br/>
+                    <strong>JSON trace coverage:</strong>
+                    {
+                    esc(
+                        "COMPLETE"
+                        if json_trace_coverage is True
+                        else ("INCOMPLETE" if json_trace_coverage is False else "—")
+                    )
+                }
+                    <br/>
                     <strong>Reconciliation:</strong>
                     <span class="{reconciliation_class}">
                         {esc(reconciliation_status)}
@@ -4681,6 +4731,145 @@ with tab_audit:
                 "audit source for this run."
             )
 
+            # ------------------------------------------------
+            # ORCHESTRATION DIAGNOSTICS
+            # ------------------------------------------------
+
+            st.markdown("#### Orchestration diagnostics")
+
+            diagnostics = json_diagnostics
+
+            if diagnostics:
+                outcome_counts = diagnostics.get("outcome_counts") or {}
+
+                decision_reason_counts = diagnostics.get("decision_reason_counts") or {}
+
+                diagnostic_summary = [
+                    (
+                        "Ticks",
+                        diagnostics.get("tick_count", 0),
+                    ),
+                    (
+                        "Trade traces",
+                        diagnostics.get("trade_trace_count", 0),
+                    ),
+                    (
+                        "Trace tickers",
+                        diagnostics.get("trade_trace_tickers", 0),
+                    ),
+                    (
+                        "Risk approvals",
+                        diagnostics.get("risk_approvals", 0),
+                    ),
+                    (
+                        "Local rejections",
+                        diagnostics.get("local_rejections", 0),
+                    ),
+                    (
+                        "Coordinator approvals",
+                        diagnostics.get("coordinator_approvals", 0),
+                    ),
+                    (
+                        "Book rejections",
+                        diagnostics.get("book_rejections", 0),
+                    ),
+                    (
+                        "Execution attempts",
+                        diagnostics.get("execution_attempts", 0),
+                    ),
+                    (
+                        "Execution successes",
+                        diagnostics.get("execution_successes", 0),
+                    ),
+                    (
+                        "Execution failures",
+                        diagnostics.get("execution_failures", 0),
+                    ),
+                    (
+                        "Execution events",
+                        diagnostics.get("execution_events", 0),
+                    ),
+                    (
+                        "Closed trades",
+                        diagnostics.get("closed_trades", 0),
+                    ),
+                ]
+
+                display_html(
+                    '<div class="kpi-grid">'
+                    + "".join(
+                        f"""
+                        <div class="kpi">
+                            <div class="label">
+                                {esc(label)}
+                            </div>
+                            <div class="value">
+                                {esc(value)}
+                            </div>
+                        </div>
+                        """
+                        for label, value in diagnostic_summary
+                    )
+                    + "</div>"
+                )
+
+                trace_coverage = diagnostics.get("trace_coverage_complete")
+
+                if trace_coverage is True:
+                    st.success(
+                        "Trace coverage complete: every persisted "
+                        "backtest tick has a TradeTrace."
+                    )
+
+                elif trace_coverage is False:
+                    st.warning(
+                        "Trace coverage incomplete: the number of "
+                        "TradeTrace records does not match the tick count."
+                    )
+
+                d1, d2 = st.columns(2)
+
+                with d1:
+                    st.markdown("**Outcome distribution**")
+
+                    outcome_rows = [
+                        {
+                            "Outcome": outcome_label(outcome),
+                            "Count": count,
+                        }
+                        for outcome, count in sorted(outcome_counts.items())
+                    ]
+
+                    if outcome_rows:
+                        st.table(outcome_rows)
+                    else:
+                        st.caption("No outcome diagnostics recorded.")
+
+                with d2:
+                    st.markdown("**Decision reasons**")
+
+                    reason_rows = [
+                        {
+                            "Decision reason": str(reason),
+                            "Count": count,
+                        }
+                        for reason, count in sorted(decision_reason_counts.items())
+                    ]
+
+                    if reason_rows:
+                        st.table(reason_rows)
+                    else:
+                        st.caption("No decision-reason diagnostics recorded.")
+
+            else:
+                st.info(
+                    "No orchestration diagnostics were recorded "
+                    "in the persisted JSON result."
+                )
+
+            # ------------------------------------------------
+            # PHASE-6 AUDIT RECONSTRUCTION
+            # ------------------------------------------------
             # ------------------------------------------------
             # PHASE-6 AUDIT RECONSTRUCTION
             # ------------------------------------------------
@@ -5337,6 +5526,481 @@ with tab_audit:
                         )
 
                     st.info(audit_interpretation)
+
+# ============================================================
+# HISTORICAL LIFECYCLE DEMO
+# ============================================================
+# ============================================================
+# HISTORICAL LIFECYCLE DEMO
+# ============================================================
+
+if "lifecycle_result" not in st.session_state:
+    st.session_state.lifecycle_result = None
+
+if "lifecycle_run_id" not in st.session_state:
+    st.session_state.lifecycle_run_id = None
+
+if "lifecycle_ticker" not in st.session_state:
+    st.session_state.lifecycle_ticker = None
+
+if "lifecycle_start" not in st.session_state:
+    st.session_state.lifecycle_start = None
+
+if "lifecycle_end" not in st.session_state:
+    st.session_state.lifecycle_end = None
+
+
+with st.expander(
+    "📈 Historical Lifecycle Replay",
+    expanded=False,
+):
+    st.markdown("### 📈 Historical Lifecycle Replay")
+
+    st.caption(
+        "Recruiter/demo proof of a stateful trading lifecycle. "
+        "Historical sessions are replayed through the existing "
+        "backtest runner and canonical run_tick() orchestration. "
+        "The UI does not implement a second execution path."
+    )
+
+    display_html(
+        """
+        <div class="demo-banner">
+            <div class="demo-banner-title">
+                STATEFUL TRADING LIFECYCLE
+            </div>
+
+            <div class="demo-banner-text">
+                Replay historical sessions and inspect the complete
+                position lifecycle: BUY → OPEN → SELL → CLOSED,
+                together with accounting state, realized P&L,
+                and TradeTrace telemetry.
+            </div>
+        </div>
+        """
+    )
+
+    lifecycle_c1, lifecycle_c2, lifecycle_c3 = st.columns(3)
+
+    with lifecycle_c1:
+        lifecycle_ticker = st.selectbox(
+            "Lifecycle ticker",
+            [
+                "AAPL",
+                "MSFT",
+                "GOOGL",
+                "JPM",
+            ],
+            key="lifecycle_ticker_selector",
+        )
+
+    with lifecycle_c2:
+        lifecycle_start = st.date_input(
+            "Start date",
+            value=date(2024, 6, 3),
+            key="lifecycle_start_date",
+        )
+
+    with lifecycle_c3:
+        lifecycle_end = st.date_input(
+            "End date",
+            value=date(2024, 6, 10),
+            key="lifecycle_end_date",
+        )
+
+    if lifecycle_start > lifecycle_end:
+        st.error("Start date must be on or before end date.")
+
+    else:
+        st.caption(
+            "Historical replay only exposes data available as of each "
+            "simulated session. Future bars are not exposed to earlier "
+            "sessions."
+        )
+
+        if st.button(
+            "▶ Run Historical Lifecycle",
+            width="stretch",
+            type="primary",
+            key="run_historical_lifecycle",
+        ):
+            try:
+                with st.spinner(
+                    f"Replaying {lifecycle_ticker} historical lifecycle..."
+                ):
+                    (
+                        lifecycle_run_id,
+                        lifecycle_result,
+                    ) = run_historical_lifecycle_demo(
+                        ticker=lifecycle_ticker,
+                        start_date=lifecycle_start,
+                        end_date=lifecycle_end,
+                    )
+
+                st.session_state.lifecycle_run_id = lifecycle_run_id
+                st.session_state.lifecycle_result = lifecycle_result
+                st.session_state.lifecycle_ticker = lifecycle_ticker
+                st.session_state.lifecycle_start = lifecycle_start
+                st.session_state.lifecycle_end = lifecycle_end
+
+                st.success(f"Lifecycle replay completed: `{lifecycle_run_id}`")
+
+            except Exception as exc:  # noqa: BLE001
+                if LOGFIRE_OK:
+                    logfire.exception(
+                        "Historical lifecycle demo failed",
+                        error_type=type(exc).__name__,
+                    )
+
+                st.error("Historical lifecycle replay failed.")
+
+                with st.expander("Technical error"):
+                    st.exception(exc)
+
+    lifecycle_result = st.session_state.get("lifecycle_result")
+
+    if lifecycle_result is not None:
+        st.divider()
+
+        tick_log = list(
+            getattr(
+                lifecycle_result,
+                "tick_log",
+                [],
+            )
+            or []
+        )
+
+        closed_trades = list(
+            getattr(
+                lifecycle_result,
+                "closed_trades",
+                [],
+            )
+            or []
+        )
+
+        trade_traces = list(
+            getattr(
+                lifecycle_result,
+                "trade_traces",
+                [],
+            )
+            or []
+        )
+
+        final_equity = getattr(
+            lifecycle_result,
+            "final_equity",
+            None,
+        )
+
+        final_cash = getattr(
+            lifecycle_result,
+            "final_cash",
+            None,
+        )
+
+        realized_pnl = getattr(
+            lifecycle_result,
+            "final_realized_pnl",
+            None,
+        )
+
+        # --------------------------------------------------------
+        # REPLAY IDENTITY
+        # --------------------------------------------------------
+
+        st.markdown("#### Replay identity")
+
+        identity_rows = [
+            {
+                "Property": "Run ID",
+                "Value": st.session_state.get("lifecycle_run_id") or "—",
+            },
+            {
+                "Property": "Ticker",
+                "Value": st.session_state.get("lifecycle_ticker") or "—",
+            },
+            {
+                "Property": "Start date",
+                "Value": str(st.session_state.get("lifecycle_start") or "—"),
+            },
+            {
+                "Property": "End date",
+                "Value": str(st.session_state.get("lifecycle_end") or "—"),
+            },
+            {
+                "Property": "Replay boundary",
+                "Value": "simulated_date",
+            },
+        ]
+
+        st.dataframe(
+            identity_rows,
+            width="stretch",
+            hide_index=True,
+        )
+
+        # --------------------------------------------------------
+        # LIFECYCLE SUMMARY
+        # --------------------------------------------------------
+
+        st.markdown("#### Lifecycle summary")
+
+        successful_executions = sum(
+            1
+            for entry in tick_log
+            if isinstance(entry, dict) and entry.get("execution_success") is True
+        )
+
+        buy_events = sum(
+            1
+            for entry in tick_log
+            if isinstance(entry, dict)
+            and str(entry.get("execution_side") or "").lower() == "buy"
+            and entry.get("execution_success") is True
+        )
+
+        sell_events = sum(
+            1
+            for entry in tick_log
+            if isinstance(entry, dict)
+            and str(entry.get("execution_side") or "").lower() == "sell"
+            and entry.get("execution_success") is True
+        )
+
+        summary_c1, summary_c2, summary_c3, summary_c4, summary_c5 = st.columns(5)
+
+        with summary_c1:
+            st.metric(
+                "Historical ticks",
+                len(tick_log),
+            )
+
+        with summary_c2:
+            st.metric(
+                "Successful executions",
+                successful_executions,
+            )
+
+        with summary_c3:
+            st.metric(
+                "BUY events",
+                buy_events,
+            )
+
+        with summary_c4:
+            st.metric(
+                "SELL events",
+                sell_events,
+            )
+
+        with summary_c5:
+            st.metric(
+                "Closed trades",
+                len(closed_trades),
+            )
+
+        # --------------------------------------------------------
+        # LIFECYCLE STATUS
+        # --------------------------------------------------------
+
+        has_buy = buy_events > 0
+        has_sell = sell_events > 0
+        has_closed_trade = len(closed_trades) > 0
+
+        if has_buy and has_sell and has_closed_trade:
+            st.success("Complete lifecycle observed: BUY → OPEN → SELL → CLOSED.")
+
+        elif has_buy and not has_sell:
+            st.warning(
+                "A BUY execution was observed, but this replay window "
+                "did not produce a completed SELL/CLOSED lifecycle."
+            )
+
+        elif has_sell and not has_buy:
+            st.warning(
+                "A SELL execution was observed, but no BUY/open position "
+                "was observed within this replay window."
+            )
+
+        else:
+            st.info(
+                "This replay window did not produce a complete "
+                "BUY → OPEN → SELL → CLOSED lifecycle."
+            )
+
+        # --------------------------------------------------------
+        # POSITION LIFECYCLE
+        # --------------------------------------------------------
+
+        st.markdown("#### Position lifecycle")
+
+        lifecycle_rows = []
+
+        for entry in tick_log:
+            if not isinstance(entry, dict):
+                continue
+
+            side = entry.get("execution_side")
+
+            remaining_shares = safe_float(entry.get("remaining_shares"))
+
+            position_state = entry.get("position_state")
+
+            if not position_state:
+                if entry.get("position_closed"):
+                    position_state = "CLOSED"
+
+                elif remaining_shares is not None and remaining_shares > 0:
+                    position_state = "OPEN"
+
+                else:
+                    position_state = "NO POSITION"
+
+            lifecycle_rows.append(
+                {
+                    "Date": entry.get(
+                        "date",
+                        "—",
+                    ),
+                    "Ticker": entry.get(
+                        "ticker",
+                        "—",
+                    ),
+                    "Action": (str(side).upper() if side else "HOLD"),
+                    "Outcome": entry.get(
+                        "outcome",
+                        "—",
+                    ),
+                    "Price": (
+                        fmt_money(entry.get("price"))
+                        if entry.get("price") is not None
+                        else "—"
+                    ),
+                    "Shares": fmt_shares(entry.get("shares")),
+                    "Remaining": fmt_shares(entry.get("remaining_shares")),
+                    "Position": position_state,
+                    "Realized P&L": fmt_money(entry.get("realized_pnl")),
+                }
+            )
+
+        if lifecycle_rows:
+            st.dataframe(
+                lifecycle_rows,
+                width="stretch",
+                hide_index=True,
+            )
+
+        else:
+            st.info("No lifecycle tick telemetry was produced.")
+
+        # --------------------------------------------------------
+        # CLOSED TRADE EVENTS
+        # --------------------------------------------------------
+
+        st.markdown("#### Closed trade events")
+
+        if closed_trades:
+            closed_rows = []
+
+            for trade in closed_trades:
+                if not isinstance(trade, dict):
+                    continue
+
+                closed_rows.append(
+                    {
+                        "Date": trade.get(
+                            "date",
+                            "—",
+                        ),
+                        "Ticker": trade.get(
+                            "ticker",
+                            "—",
+                        ),
+                        "Side": (
+                            str(trade.get("side")).upper() if trade.get("side") else "—"
+                        ),
+                        "Shares": fmt_shares(trade.get("shares")),
+                        "Exit price": fmt_money(trade.get("exit_price")),
+                        "Average cost": fmt_money(trade.get("average_cost")),
+                        "Realized P&L": fmt_money(trade.get("realized_pnl")),
+                    }
+                )
+
+            if closed_rows:
+                st.dataframe(
+                    closed_rows,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+        else:
+            st.caption("No closed trade event was recorded in this replay.")
+
+        # --------------------------------------------------------
+        # ACCOUNTING PROOF
+        # --------------------------------------------------------
+
+        st.markdown("#### Accounting proof")
+
+        accounting_rows = [
+            {
+                "Property": "Final cash",
+                "Value": fmt_money(final_cash),
+            },
+            {
+                "Property": "Final equity",
+                "Value": fmt_money(final_equity),
+            },
+            {
+                "Property": "Realized P&L",
+                "Value": fmt_money(realized_pnl),
+            },
+            {
+                "Property": "Closed trades",
+                "Value": len(closed_trades),
+            },
+            {
+                "Property": "TradeTrace events",
+                "Value": len(trade_traces),
+            },
+            {
+                "Property": "Historical boundary",
+                "Value": "simulated_date",
+            },
+        ]
+
+        st.dataframe(
+            accounting_rows,
+            width="stretch",
+            hide_index=True,
+        )
+
+        # --------------------------------------------------------
+        # RAW REPLAY RESULT
+        # --------------------------------------------------------
+
+        with st.expander("Raw lifecycle replay result"):
+            st.json(
+                {
+                    "run_id": st.session_state.get("lifecycle_run_id"),
+                    "tick_log": tick_log,
+                    "closed_trades": closed_trades,
+                    "trade_traces": trade_traces,
+                    "final_equity": final_equity,
+                    "final_cash": final_cash,
+                    "final_realized_pnl": realized_pnl,
+                }
+            )
+
+        st.caption(
+            "This section is observational only. It surfaces the "
+            "existing backtest result, TradeTrace telemetry, position "
+            "state, and accounting outputs without implementing a "
+            "second trading execution path."
+        )
 
 # ============================================================
 # DATA & SYSTEM

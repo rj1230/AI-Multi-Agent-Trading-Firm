@@ -71,3 +71,80 @@ def test_get_account_reflects_cash_plus_positions(broker):
     account = broker.get_account()
     assert account.equity == pytest.approx(10_000.0)  # cash + position value nets out
     assert account.cash == pytest.approx(9_000.0)
+
+
+def test_zero_slippage_preserves_execution_price(broker):
+    order = broker.submit_order("AAPL", "buy", 10)
+
+    assert order.status == "filled"
+    assert order.filled_avg_price == pytest.approx(100.0)
+    assert broker.cash == pytest.approx(9_000.0)
+
+
+def test_buy_slippage_increases_execution_price():
+    broker = SimBroker(
+        starting_cash=10_000.0,
+        price_lookup=lambda ticker: 100.0,
+        slippage_bps=10.0,
+    )
+
+    order = broker.submit_order("AAPL", "buy", 10)
+
+    assert order.status == "filled"
+    assert order.filled_avg_price == pytest.approx(100.10)
+    assert broker.cash == pytest.approx(8_999.0)
+
+
+def test_sell_slippage_decreases_execution_price():
+    broker = SimBroker(
+        starting_cash=10_000.0,
+        price_lookup=lambda ticker: 100.0,
+        slippage_bps=10.0,
+    )
+
+    buy = broker.submit_order("AAPL", "buy", 10)
+    sell = broker.submit_order("AAPL", "sell", 10)
+
+    assert buy.filled_avg_price == pytest.approx(100.10)
+    assert sell.status == "filled"
+    assert sell.filled_avg_price == pytest.approx(99.90)
+    assert broker.cash == pytest.approx(9_998.0)
+
+
+def test_negative_slippage_is_rejected():
+    with pytest.raises(
+        ValueError,
+        match="slippage_bps must be non-negative",
+    ):
+        SimBroker(
+            starting_cash=10_000.0,
+            price_lookup=lambda ticker: 100.0,
+            slippage_bps=-1.0,
+        )
+
+
+def test_slippage_does_not_change_idempotent_retry():
+    broker = SimBroker(
+        starting_cash=10_000.0,
+        price_lookup=lambda ticker: 100.0,
+        slippage_bps=10.0,
+    )
+
+    first = broker.submit_order(
+        "AAPL",
+        "buy",
+        10,
+        client_order_id="run-1:tick-1:AAPL:buy:10",
+    )
+
+    retry = broker.submit_order(
+        "AAPL",
+        "buy",
+        10,
+        client_order_id="run-1:tick-1:AAPL:buy:10",
+    )
+
+    assert retry == first
+    assert retry.filled_avg_price == pytest.approx(100.10)
+    assert broker.cash == pytest.approx(8_999.0)
+    assert broker.get_positions()["AAPL"].qty == pytest.approx(10)

@@ -17,6 +17,19 @@ Idempotency:
 
 This makes ExecutionAgent retries safe and prevents duplicate portfolio
 mutations.
+
+Slippage:
+    The simulator applies deterministic percentage-point slippage expressed
+    in basis points (bps).
+
+    BUY:
+        execution_price = market_price * (1 + slippage)
+
+    SELL:
+        execution_price = market_price * (1 - slippage)
+
+The price returned by price_lookup() remains the reference market price.
+filled_avg_price contains the actual execution price after slippage.
 """
 
 from __future__ import annotations
@@ -33,26 +46,31 @@ class SimBroker:
         self,
         starting_cash: float,
         price_lookup: Callable[[str], float],
+        *,
+        slippage_bps: float = 0.0,
     ):
         if starting_cash < 0:
             raise ValueError("starting_cash must be non-negative")
 
+        if slippage_bps < 0:
+            raise ValueError("slippage_bps must be non-negative")
+
         self.cash = starting_cash
         self.price_lookup = price_lookup
+        self.slippage_bps = float(slippage_bps)
 
         self._positions: dict[str, BrokerPosition] = {}
 
         # Logical client-order identity -> immutable execution result.
         #
-        # This is the simulator's idempotency store. A retry with the same
-        # client_order_id must return the original result and must not mutate
-        # cash or positions again.
+        # A retry with the same client_order_id must return the original
+        # result and must not mutate cash or positions again.
         self._orders_by_client_id: dict[str, OrderResult] = {}
 
         # Broker order identity -> execution result.
         #
-        # This gives the simulator a minimal persistent-in-process order
-        # lifecycle representation without introducing asynchronous behavior.
+        # This gives the simulator a minimal in-process order lifecycle
+        # representation without introducing asynchronous behavior.
         self._orders_by_order_id: dict[str, OrderResult] = {}
 
         self._next_order_id = 1
@@ -93,7 +111,7 @@ class SimBroker:
         # --------------------------------------------------------------
         # Idempotency boundary.
         #
-        # This check MUST happen before price lookup or any portfolio
+        # This check MUST happen before price lookup or portfolio
         # mutation. A retry therefore cannot double-fill.
         # --------------------------------------------------------------
         if client_order_id:
@@ -121,14 +139,30 @@ class SimBroker:
             )
             return self._record_order(result, client_order_id)
 
-        cost = price * qty
+        # --------------------------------------------------------------
+        # Apply deterministic slippage to the reference market price.
+        #
+        # price_lookup() remains the reference price.
+        # execution_price is the actual simulated fill price.
+        # --------------------------------------------------------------
+        slippage = self.slippage_bps / 10_000
 
+        if side == "buy":
+            execution_price = price * (1 + slippage)
+        else:
+            execution_price = price * (1 - slippage)
+
+        cost = execution_price * qty
+
+        # --------------------------------------------------------------
+        # Apply the actual execution price to the fill.
+        # --------------------------------------------------------------
         if side == "buy":
             result = self._fill_buy(
                 order_id=order_id,
                 ticker=ticker,
                 qty=qty,
-                price=price,
+                price=execution_price,
                 cost=cost,
             )
         else:
@@ -136,10 +170,12 @@ class SimBroker:
                 order_id=order_id,
                 ticker=ticker,
                 qty=qty,
-                price=price,
+                price=execution_price,
                 cost=cost,
             )
 
+        # Record BOTH successful and rejected results so retries remain
+        # idempotent.
         return self._record_order(result, client_order_id)
 
     # ------------------------------------------------------------------
@@ -155,8 +191,8 @@ class SimBroker:
         Record the broker result.
 
         Both successful and rejected results are stored against the
-        client_order_id so a retry of the same logical order receives the
-        same outcome.
+        client_order_id so a retry of the same logical order receives
+        the same outcome.
         """
 
         self._orders_by_order_id[result.order_id] = result
@@ -203,7 +239,6 @@ class SimBroker:
                 market_value=new_qty * price,
                 avg_entry_price=new_avg,
             )
-
         else:
             self._positions[ticker] = BrokerPosition(
                 ticker=ticker,
@@ -250,7 +285,6 @@ class SimBroker:
 
         if remaining <= 0:
             del self._positions[ticker]
-
         else:
             self._positions[ticker] = BrokerPosition(
                 ticker=ticker,

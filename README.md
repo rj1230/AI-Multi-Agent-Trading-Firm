@@ -13,8 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > ⚠️ **Paper trading and historical backtesting only. No real capital is at risk.**
-🔗 **Live Demo:** [AI MULTI AGENT TRADING FIRM Streamlit App]
-> (https://ai-multi-agent-trading-firm-ft7czhcn94s7flzhj96pk3.streamlit.app/)
+🔗 **Live Demo:** [AI MULTI AGENT TRADING FIRM Streamlit App](https://ai-multi-agent-trading-firm-ft7czhcn94s7flzhj96pk3.streamlit.app/)
 
 </div>
 

@@ -1,18 +1,28 @@
+<div align="center">
+
 # 📈 AI Multi-Agent Trading Firm
 
-**Auditable multi-agent trading research and backtesting platform built with LangGraph, Groq, deterministic risk controls, and a broker-agnostic portfolio ledger.**
+### Auditable Multi-Agent Trading Research & Backtesting Platform
 
-> **Paper trading and historical backtesting only. No real capital is at risk.**
+**LangGraph agents interpret market evidence. Deterministic risk, portfolio, execution, and accounting systems authorize every action.**
+
+[![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Multi_Agent-1C3C3C)](https://github.com/langchain-ai/langgraph)
+[![FastAPI](https://img.shields.io/badge/pytest-168_Tests-brightgreen)](#-testing)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Research_Dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+> ⚠️ **Paper trading and historical backtesting only. No real capital is at risk.**
+
+</div>
 
 ---
 
-## Overview
+## 📌 Overview
 
-AI Multi-Agent Trading Firm is a reproducible trading research platform that combines LLM-based market interpretation with deterministic financial controls.
+**AI Multi-Agent Trading Firm** is a reproducible trading research platform that combines LLM-based market interpretation with deterministic financial controls.
 
-LLM agents analyze news and technical market signals, but they do not directly place trades, set risk limits, or modify portfolio accounting. A deterministic control plane validates agent output, authorizes risk, arbitrates portfolio-level constraints, executes approved orders, and maintains the ledger.
-
-**Core principle:** LLM judgment is not authorization to trade.
+LLM agents analyze news and technical market data, but they do **not** directly place trades, set risk limits, or modify portfolio accounting. A deterministic control plane validates signals, authorizes risk, arbitrates portfolio-level constraints, executes approved orders, and maintains the ledger.
 
 ---
 

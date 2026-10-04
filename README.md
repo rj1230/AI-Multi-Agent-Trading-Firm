@@ -289,17 +289,5 @@ CI runs the test suite through GitHub Actions.
 
 ---
 
-## Research Roadmap
-
-Future work focuses on evaluation quality rather than adding more agents:
-
-- News-only vs Chart-only ablations
-- News + Chart vs deterministic baseline
-- Walk-forward and out-of-sample validation
-- Multiple market-regime evaluation
-- Transaction-cost and slippage modeling
-- LLM latency and cost analysis
-- Strategy attribution
-- Statistical significance testing
 
 ---

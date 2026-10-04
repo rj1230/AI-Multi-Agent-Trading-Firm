@@ -303,18 +303,3 @@ Future work focuses on evaluation quality rather than adding more agents:
 - Statistical significance testing
 
 ---
-
-## Disclaimer
-
-This project is for educational, research, backtesting, and paper-trading purposes only. It does not provide financial advice and is not intended to manage real capital.
-
-Risk controls are software safeguards, not guarantees against financial loss. Past backtest performance does not guarantee future results.
-
----
-
-## Author
-
-**Raj Rajput**  
-Aspiring AI/ML Engineer · Agentic AI · LLM Systems · Production ML
-
-GitHub: [@rj1230](https://github.com/rj1230)

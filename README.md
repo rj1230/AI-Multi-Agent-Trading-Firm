@@ -1,116 +1,235 @@
+<div align="center">
+
 # 📈 AI Multi-Agent Trading Firm
 
-**Multi-agent trading research platform built with LangGraph, Groq, deterministic risk controls, and a broker-agnostic portfolio ledger — for auditable, reproducible AI-assisted trading research.**
+### Auditable Multi-Agent Trading Research & Backtesting Platform
 
-> **Paper trading and historical backtesting only — no real capital at risk.**
+**LangGraph agents interpret market evidence. Deterministic risk, portfolio, execution, and accounting systems authorize every action.**
 
-AI Multi-Agent Trading Firm separates *judgment* from *correctness*. LLM agents interpret financial news and technical signals; deterministic software handles signal merging, risk authorization, position sizing, execution, portfolio accounting, backtesting, and evaluation. The result is a trading pipeline that stays testable, traceable, and reproducible — not an LLM with its hands on the order button.
+[![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Multi_Agent-1C3C3C)](https://github.com/langchain-ai/langgraph)
+[![FastAPI](https://img.shields.io/badge/pytest-168_Tests-brightgreen)](#-testing)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Research_Dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Use AI where judgment is useful; use deterministic software where correctness, risk, and accounting matter.**
+> ⚠️ **Paper trading and historical backtesting only. No real capital is at risk.**
+
+</div>
+
+---
+
+## 📌 Overview
+
+**AI Multi-Agent Trading Firm** is a reproducible trading research platform that combines LLM-based market interpretation with deterministic financial controls.
+
+LLM agents analyze news and technical market data, but they do **not** directly place trades, set risk limits, or modify portfolio accounting. A deterministic control plane validates signals, authorizes risk, arbitrates portfolio-level constraints, executes approved orders, and maintains the ledger.
+
+> **Core principle:** Let AI reason. Let deterministic systems enforce.
+
+---
+
+## 🧠 Architecture
+
+```mermaid
+flowchart TD
+    A[Market Data + News] --> B[Tick Orchestrator]
+    B --> C1[News Agent]
+    B --> C2[Chart Agent]
+
+    C1 --> D[Pydantic Validation<br/>Retry + Fallback]
+    C2 --> D
+
+    D --> E[Deterministic Signal Merger]
+    E --> F[Risk Agent<br/>ATR Sizing + Local Limits]
+    F --> G[Portfolio Risk Coordinator<br/>Cross-Ticker Arbitration]
+
+    G -->|Approved| H[Execution Agent]
+    G -->|Rejected / Hold| Z[Telemetry + Audit]
+
+    H --> I[Broker Protocol]
+    I --> J[SimBroker / Alpaca Paper]
+    J --> K[Confirmed Fill]
+    K --> L[Portfolio Ledger]
+
+    L --> M[Telemetry + Evaluation]
+    D --> M
+    F --> M
+    G --> M
+    H --> M
+
+    M --> N[Backtest Results + Streamlit Dashboard]
+```
+
+### Design Boundary
+
+```text
+LLM judgment ≠ authorization to trade
+```
+
+| Plane | Responsibility |
+|---|---|
+| **Intelligence Plane** | News and Chart agents produce structured market judgments |
+| **Control Plane** | Validation, signal fusion, risk authorization, and portfolio arbitration |
+| **Execution Plane** | Broker calls, confirmed fills, idempotency, and ledger updates |
+| **Observability Plane** | LangSmith traces, tick telemetry, audit events, and evaluation |
 
 ---
 
 ## ✨ Key Features
 
-- **LangGraph multi-agent pipeline** — News and Chart agents run in parallel per ticker → Signal Merger → Risk Agent, with multi-ticker fan-out, not a single-shot LLM call
-- **Deterministic Signal Merger** — resolves agreement and conflict between News and Chart signals with no LLM in the loop
-- **Risk authorization ≠ signal generation** — ATR-based sizing, per-ticker and per-sector caps, correlation checks, and a daily circuit breaker; a bullish signal never automatically becomes an order
-- **Portfolio Risk Coordinator** — book-level arbitration across all tickers in a tick; highest-conviction proposals win the shared exposure budget
-- **Broker / ledger separation** — `SimBroker` (or Alpaca paper) executes; `PortfolioLedger` accounts (weighted average cost, partial sells, realized P&L) and updates only after a confirmed fill
-- **Historical backtesting engine** — replays real cached sessions with simulated dates, historical data cutoffs, a fresh isolated portfolio per run, and a buy-and-hold benchmark
-- **News provenance** — missing news is explicit data (`AVAILABLE` / `UNAVAILABLE` / `ERROR` / `AVAILABLE_WITH_ZERO_ELIGIBLE_ARTICLES`), never silently treated as neutral
-- **Full observability** — LangSmith traces across every node plus tick-level telemetry (signal, risk decision, execution, fills, news provenance) saved as structured JSON
-- **Streamlit dashboard** — run backtests and inspect pipeline stages, portfolio state, and results
-- **Correctness-first test suite** — 168 automated tests with GitHub Actions CI
+### 🤖 Multi-Agent Orchestration
+
+- LangGraph-based multi-agent pipeline with parallel News and Chart agents.
+- Multi-ticker fan-out using isolated ticker-level subgraphs.
+- Deterministic Signal Merger reconciles agent outputs without relying on another LLM.
+- Explicit `HOLD` and rejection paths for unsafe or unauthorized proposals.
+
+### 🛡️ Deterministic Risk Controls
+
+A bullish LLM signal does not automatically become an order.
+
+| Control | Default |
+|---|---:|
+| Risk per trade | 1% of equity |
+| Stop methodology | 1.5× ATR |
+| Maximum position per ticker | 20% |
+| Maximum sector exposure | 40% |
+| Maximum concurrent positions | 3 |
+| Daily circuit breaker | -3% |
+| Correlation threshold | 0.7 |
+
+The risk engine can approve, reject, downsize, enforce exposure limits, reject excessive correlation, and halt trading after the daily circuit breaker.
+
+### 🧠 Safe LLM Integration
+
+- LLM responses are treated as untrusted structured inputs.
+- Pydantic schemas validate every agent output.
+- Invalid outputs trigger retry and then a safe fallback.
+- Malformed model output cannot silently reach risk or execution layers.
+
+### 🏦 Broker-Agnostic Execution
+
+- Common broker protocol supports `SimBroker` for backtesting and Alpaca for paper trading.
+- Idempotent order handling prevents duplicate accounting.
+- Confirmed fills drive portfolio state updates.
+- Ledger supports weighted-average cost, partial sells, realized P&L, cash, and open positions.
+
+### 🔁 Lookahead-Safe Backtesting
+
+- Historical sessions are replayed through the same core pipeline.
+- Each run uses fresh portfolio state and a simulated date.
+- Data access is restricted to information available at the current tick.
+- Results are benchmarked against equal-weight buy-and-hold.
+
+```text
+T-2 ─── T-1 ─── T ─── T+1 ─── T+2
+                 ↑
+Allowed: T-2, T-1, T
+Forbidden: T+1, T+2
+```
 
 ---
 
-## 🏗️ Architecture
+## 📊 Evaluation
 
-```
-                 Market Data (OHLCV + News · live or historical replay)
-                                      │
-                    ┌─────────────────┴─────────────────┐
-                    ▼                                   ▼
-             ┌─────────────┐                     ┌─────────────┐
-             │ News Agent  │                     │ Chart Agent │
-             │ (LLM)       │                     │ (technical) │
-             └──────┬──────┘                     └──────┬──────┘
-                    └─────────────────┬─────────────────┘
-                                      ▼
-                             ┌─────────────────┐
-                             │  Signal Merger  │  deterministic
-                             └────────┬────────┘
-                                      ▼
-                             ┌─────────────────┐
-                             │   Risk Agent    │  ATR sizing · caps · checks
-                             └────────┬────────┘
-                                      ▼
-                        ┌───────────────────────────┐
-                        │ Portfolio Risk Coordinator│  book-level, all tickers
-                        └─────────────┬─────────────┘
-                              ┌───────┴────────┐
-                              ▼                ▼
-                        ┌──────────┐    ┌───────────────┐
-                        │ HoldNode │    │ Execution     │
-                        │          │    │ Agent         │
-                        └──────────┘    └───────┬───────┘
-                                                ▼
-                                   SimBroker / Alpaca (paper)
-                                                ▼
-                                        PortfolioLedger
-                                                ▼
-                                Backtest Engine → Performance Metrics
+Backtests generate an equity curve and compare strategy performance against buy-and-hold.
+
+Metrics include:
+
+- Total return
+- Excess return vs benchmark
+- Sharpe ratio
+- Maximum drawdown
+- Realized P&L
+- Profit factor
+- Win rate
+- Closed round-trip trades
+
+> `win_rate = None` means there were no scored closed trades—not a 0% win rate.
+
+Short backtests validate execution correctness, accounting, risk authorization, orchestration, and failure handling. They are not statistically significant evidence of future profitability.
+
+---
+
+## 🔍 Observability
+
+Every tick can be reconstructed across the full decision path:
+
+```text
+Market Data → Agent Signal → Signal Merge → Risk Decision →
+Portfolio Arbitration → Execution → Fill → Ledger → Performance
 ```
 
-**Flow:** Market data enters per-ticker subgraphs that run concurrently → News Agent interprets headlines while Chart Agent reads technical signals → Signal Merger deterministically combines them → Risk Agent authorizes or rejects with sizing based on ATR → Portfolio Risk Coordinator arbitrates across all tickers in the tick → approved trades go to the Execution Agent and broker, rejected ones to HoldNode → confirmed fills are recorded in the PortfolioLedger → the backtest engine turns the session history into an equity curve and metrics. Every node emits traces and telemetry.
+Structured telemetry records:
+
+- Agent signal and confidence
+- Agent agreement
+- ATR, entry price, and proposed quantity
+- Risk decision and notes
+- Portfolio-level approval or rejection
+- Execution attempt and result
+- Confirmed fill
+- News provenance
+- Portfolio state
+
+News availability is explicit: `AVAILABLE`, `UNAVAILABLE`, `ERROR`, or `AVAILABLE_WITH_ZERO_ELIGIBLE_ARTICLES`. Missing news is never silently converted into a neutral signal.
+
+---
+
+## 🧪 Reliability
+
+| Failure Path | System Behavior |
+|---|---|
+| Invalid LLM output | Validate → retry → safe fallback |
+| Unsafe or rejected proposal | Reject → no execution → no ledger mutation |
+| Execution failure | No confirmed fill → no ledger mutation |
+| Duplicate order | Idempotency check prevents duplicate accounting |
+| Daily loss limit | Circuit breaker halts further trading |
+
+These invariants ensure rejected, failed, or unconfirmed events never mutate portfolio accounting.
 
 ---
 
 ## 🧩 Tech Stack
 
-| Layer | Tool |
+| Layer | Tools |
 |---|---|
 | Agent orchestration | LangGraph |
-| LLM inference | Groq (gpt-oss models) |
-| Output validation | Pydantic (retry-then-fallback) + NeMo Guardrails |
-| Market data | Alpaca (with yfinance fallback) |
-| News data | NewsAPI |
-| Broker | SimBroker (backtest) / Alpaca paper trading |
-| Portfolio accounting | JSON-backed `PortfolioLedger` (weighted average cost) |
-| Observability | LangSmith tracing + tick-level telemetry |
-| Evaluation | Sharpe, max drawdown, win rate, profit factor, buy-and-hold benchmark |
-| Demo UI | Streamlit |
-| Testing / CI | pytest, ruff, GitHub Actions |
+| LLM inference | Groq / GPT-OSS models |
+| Structured validation | Pydantic |
+| Guardrails | NeMo Guardrails |
+| Market data | Alpaca, yfinance fallback |
+| News | NewsAPI |
+| Broker execution | SimBroker, Alpaca Paper |
+| Portfolio accounting | Custom JSON-backed ledger |
+| Observability | LangSmith, structured tick telemetry |
+| Backtesting | Historical replay engine |
+| Dashboard | Streamlit |
+| Testing | pytest |
+| CI | GitHub Actions |
 | Runtime | Python 3.13, uv |
 
 ---
 
 ## 📂 Project Structure
 
-```
+```text
 AI-Multi-Agent-Trading-Firm/
-├── agents/            # News / Chart / Risk / Execution agents, signal merger, guardrails, retry helper
-├── graph/             # LangGraph state, nodes, and graph builder
-├── orchestrator/      # tick_runner.py — multi-ticker fan-out + coordinator + execution
-├── portfolio/         # PortfolioLedger, risk coordinator, correlation, circuit breaker
-├── broker/            # Broker protocol, SimBroker, AlpacaBroker
-├── data_sources/      # Live + historical replay sources, shared Pydantic schemas
-├── data_cache/        # Cached historical OHLCV + news (git-ignored)
-├── backtest/          # runner.py, metrics.py, results/
-├── mandates/          # default.yaml — risk mandate
-├── config/            # risk_config.py, sectors.py, settings.py, guardrails/
-├── dashboard/         # Streamlit UI components
-├── harness/
-├── scheduler/
-├── storage/
-├── telemetry/
-├── tools/
-├── scripts/
-├── tests/             # ledger, backtest runner, tick runner, guardrails, nodes, ...
-├── ui.py              # Streamlit entrypoint
-├── run_one_tick.py    # Run a single live tick
-├── smoke_test.py      # API connectivity check
+├── agents/                 # News, chart, risk, execution, signal merger, guardrails
+├── graph/                  # LangGraph state, nodes, and graph builder
+├── orchestrator/           # Multi-ticker tick runner
+├── portfolio/              # Ledger, risk coordinator, correlation, circuit breaker
+├── broker/                 # Broker protocol, SimBroker, Alpaca broker
+├── data_sources/           # Live and historical data schemas
+├── data_cache/             # Historical OHLCV and news cache
+├── backtest/               # Runner, metrics, and result artifacts
+├── mandates/               # Risk mandate configuration
+├── config/                 # Settings, sectors, guardrails
+├── dashboard/              # Streamlit dashboard components
+├── harness/                # Experiment and evaluation utilities
+├── telemetry/              # Structured observability
+├── tests/                  # Automated test suite
+├── ui.py                   # Streamlit entrypoint
 └── requirements.txt
 ```
 
@@ -118,82 +237,135 @@ AI-Multi-Agent-Trading-Firm/
 
 ## 🚀 Quick Start
 
+### 1. Install
+
 ```bash
-# 1. Install
 pip install -r requirements.txt
+```
 
-# 2. Configure .env
-GROQ_API_KEY=...
-NEWSAPI_KEY=...
-ALPACA_API_KEY=...
-ALPACA_API_SECRET=...
-TRADING_MODE=backtest          # or: live (paper)
-LANGCHAIN_TRACING_V2=true      # optional — LangSmith tracing
-LANGCHAIN_API_KEY=...
-LANGCHAIN_PROJECT=...
+Or with `uv`:
 
-# 3. Run a historical backtest
-python -m backtest.runner --tickers AAPL,MSFT,GOOGL,JPM --start 2026-08-25 --end 2026-09-20 --run-id sep2026
+```bash
+uv pip install -r requirements.txt
+```
 
-# 4. Launch the dashboard
+### 2. Configure environment
+
+Create a `.env` file:
+
+```env
+GROQ_API_KEY=your_groq_api_key
+NEWSAPI_KEY=your_newsapi_key
+
+ALPACA_API_KEY=your_alpaca_api_key
+ALPACA_API_SECRET=your_alpaca_api_secret
+
+TRADING_MODE=backtest
+
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your_langsmith_api_key
+LANGCHAIN_PROJECT=ai-multi-agent-trading-firm
+```
+
+Supported modes:
+
+```text
+backtest
+paper
+```
+
+### 3. Run a backtest
+
+```bash
+python -m backtest.runner \
+  --tickers AAPL,MSFT,GOOGL,JPM \
+  --start 2026-08-25 \
+  --end 2026-09-20 \
+  --run-id sep2026
+```
+
+Results are written to:
+
+```text
+backtest/results/sep2026.json
+```
+
+### 4. Launch the dashboard
+
+```bash
 streamlit run ui.py
+```
 
-# 5. Run the test suite
+### 5. Run tests
+
+```bash
 pytest tests/ -v
 ```
 
-Backtests replay cached sessions, so populate the historical OHLCV/news cache first (see `seed_news_cache.py`). Results are written to `backtest/results/<run-id>.json`.
+---
+
+## 🖥️ Dashboard
+
+The Streamlit research dashboard supports:
+
+- Backtest execution
+- Agent pipeline stages
+- Risk approvals and rejections
+- Execution events
+- Portfolio state
+- Equity curves
+- Trade analysis
+- Performance metrics
+- Structured telemetry
 
 ---
 
-## 🛡️ Guardrails & Risk Controls
+## 🧪 Testing
 
-- **LLM output gate** — agent outputs are validated against strict Pydantic schemas; on failure the agent retries, then falls back to a neutral signal instead of passing bad data downstream
-- **Deterministic risk authorization** — the default mandate enforces 1% equity risk per trade with a 1.5× ATR stop, 20% max per ticker, 40% max per sector, 3 concurrent positions max, a −3% daily circuit breaker, and correlation checks that reject or downsize new positions above 0.7
-- **Book-level arbitration** — when the shared sector/exposure budget runs out, the lowest-conviction proposals lose their slot
-- **Fail-safe accounting** — rejected or failed orders never mutate the ledger; order idempotency prevents duplicate fills
-- **Lookahead protection** — backtest mode refuses to run without a simulated date, and every data fetch is cut off at that date
+The project includes **168 automated tests** covering:
+
+- Portfolio accounting
+- Risk controls
+- Guardrails
+- Backtesting
+- Orchestration
+- Execution semantics
+- Failure scenarios
+
+CI runs the test suite through GitHub Actions.
 
 ---
 
-## 📊 Backtesting & Evaluation
+## 🔬 Research Roadmap
 
-Each backtest runs the same multi-agent pipeline against a **fresh portfolio state** through `SimBroker` and never touches the live/paper ledger. Results include:
+Future work focuses on evaluation quality rather than adding more agents:
 
-- Equity curve and equal-weight buy-and-hold benchmark
-- Execution events and closed round-trip trades
-- Tick-level telemetry: signal direction/confidence/agreement, ATR, entry price, proposed size, risk decision and notes, execution outcome, fills
-- News availability, article count, source, and timestamp provenance
-- Orchestration diagnostics: risk approvals, local/book rejections, execution attempts/successes/failures
-- Metrics: Sharpe ratio, max drawdown, total return, excess return vs benchmark, realized P&L, profit factor, win rate
+- News-only vs Chart-only ablations
+- News + Chart vs deterministic baseline
+- Walk-forward and out-of-sample validation
+- Multiple market-regime evaluation
+- Transaction-cost and slippage modeling
+- LLM latency and cost analysis
+- Strategy attribution
+- Statistical significance testing
 
-`win_rate = None` means there are no scored closed trades — not a 0% win rate.
+The central research question:
 
-**Weighted average cost example**
+> Does the AI component actually improve trading decisions, and under what market conditions?
 
-```
-10 shares @ $100 + 10 shares @ $120  →  average cost = $110
-Sell 5 @ $140  →  realized P&L = 5 × ($140 − $110) = $150
-```
+---
 
-Partial sells preserve the remaining position's average cost, and mark-to-market updates market value without overwriting acquisition cost.
+## 🔐 Disclaimer
 
-**Example output**
+This project is for educational, research, backtesting, and paper-trading purposes only.
 
-```
-============================================================
-BACKTEST COMPLETE
-============================================================
-Sessions      : 5
-Executed      : 3
-Final equity  : $100,463.28
-Benchmark     : 5 points
-News tickers  : 4
-Risk approvals: 7
-Exec attempts : 3
-Exec successes: 3
-Exec failures : 0
-============================================================
-```
+It does not provide financial advice and is not intended to manage real capital. Risk controls are software safeguards, not guarantees against financial loss. Past backtest performance does not guarantee future results.
 
-Short backtests are for validating execution correctness, state isolation, accounting, and orchestration — not for judging strategy performance.
+---
+
+## 👤 Author
+
+**Raj Rajput**  
+Aspiring AI/ML Engineer · Agentic AI · LLM Systems · Production ML
+
+- GitHub: [@rj1230](https://github.com/rj1230)
